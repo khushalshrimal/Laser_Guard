@@ -33,7 +33,7 @@ class TestTelemetryIngestionContract(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "accepted")
         self.assertEqual(data["data"]["source"], "HARDWARE")
-        self.assertEqual(data["data"]["device_id"], "esp32-cutter-alpha")
+        self.assertEqual(data["data"]["device_id"], "laser-cutter-01")
         self.assertEqual(data["data"]["timestamp"], "2026-10-14T10:30:00.000000Z")
         self.assertEqual(data["data"]["readings"]["door_open"], False)
         self.assertEqual(data["data"]["readings"]["flame_detected"], False)
@@ -63,7 +63,7 @@ class TestTelemetryIngestionContract(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "accepted")
         self.assertEqual(data["data"]["source"], "SIMULATOR")
-        self.assertEqual(data["data"]["device_id"], "sim-cutter-beta")
+        self.assertEqual(data["data"]["device_id"], "laser-cutter-01")
         # Timestamp was omitted: verify server generated a valid UTC ISO 8601 string
         self.assertTrue(data["data"]["timestamp"].endswith("Z"))
         self.assertEqual(data["data"]["readings"]["door_open"], True)

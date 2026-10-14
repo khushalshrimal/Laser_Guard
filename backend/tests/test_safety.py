@@ -33,6 +33,7 @@ from app.schemas import (
     DeviceStatus,
     TelemetrySource,
     ConnectivityState,
+    CANONICAL_DEVICE_ID,
 )
 
 
@@ -334,10 +335,13 @@ class TestSafetyRulesEngine(unittest.TestCase):
             },
         )
 
-        res = self.client.get("/api/safety?device_id=other-device")
+        res = self.client.get(f"/api/safety?device_id={CANONICAL_DEVICE_ID}")
         data = res.json()
         self.assertEqual(data["device_count"], 1)
-        self.assertEqual(data["assessments"][0]["device_id"], "other-device")
+        self.assertEqual(data["assessments"][0]["device_id"], CANONICAL_DEVICE_ID)
+
+        res_none = self.client.get("/api/safety?device_id=nonexistent")
+        self.assertEqual(res_none.json()["device_count"], 0)
 
     # 15. Invalid Ingestion Does Not Corrupt Safety State
     def test_invalid_ingestion_preserves_safety_assessment(self):
@@ -357,7 +361,7 @@ class TestSafetyRulesEngine(unittest.TestCase):
                 },
             },
         )
-        before = self.client.get("/api/safety?device_id=sim-corrupt-test").json()
+        before = self.client.get(f"/api/safety?device_id={CANONICAL_DEVICE_ID}").json()
         self.assertEqual(before["assessments"][0]["overall_severity"], "NORMAL")
 
         # Send invalid ingestion (HTTP 422)
@@ -372,7 +376,7 @@ class TestSafetyRulesEngine(unittest.TestCase):
         self.assertEqual(bad_res.status_code, 422)
 
         # Assessment remains NORMAL and uncorrupted
-        after = self.client.get("/api/safety?device_id=sim-corrupt-test").json()
+        after = self.client.get(f"/api/safety?device_id={CANONICAL_DEVICE_ID}").json()
         self.assertEqual(after["assessments"][0]["overall_severity"], "NORMAL")
 
     # 16. WebSocket Live Stream Enriched with Safety Assessment
@@ -400,7 +404,7 @@ class TestSafetyRulesEngine(unittest.TestCase):
             update = ws.receive_json()
             self.assertEqual(update["event"], "telemetry_update")
             dev = update["data"]["devices"][0]
-            self.assertEqual(dev["device_id"], "esp32-ws-hazard")
+            self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
             self.assertIsNotNone(dev.get("safety"))
             self.assertEqual(dev["safety"]["overall_severity"], "CRITICAL")
             self.assertEqual(dev["safety"]["recommended_state"], "STOP_RECOMMENDED")

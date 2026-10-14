@@ -24,6 +24,7 @@ from app.schemas import (
     DeviceSafetyAssessment,
     SafetyViolation,
     SensorReadings,
+    CANONICAL_DEVICE_ID,
 )
 
 
@@ -332,7 +333,7 @@ class TestEventStoreHTTP(unittest.TestCase):
         # Ingest a critical unauthorized running frame
         payload = {
             "source": "HARDWARE",
-            "device_id": "laser-http-01",
+            "device_id": CANONICAL_DEVICE_ID,
             "readings": {
                 "door_open": False,
                 "flame_detected": False,
@@ -346,7 +347,7 @@ class TestEventStoreHTTP(unittest.TestCase):
         self.assertEqual(ingest_resp.status_code, 200)
 
         # Query GET /api/events
-        events_resp = self.client.get("/api/events?device_id=laser-http-01")
+        events_resp = self.client.get(f"/api/events?device_id={CANONICAL_DEVICE_ID}")
         self.assertEqual(events_resp.status_code, 200)
         body = events_resp.json()
         self.assertGreater(body["count"], 0)

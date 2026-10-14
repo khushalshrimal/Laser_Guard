@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.registry import default_device_registry
 from app.websocket_manager import default_ws_manager
+from app.schemas import CANONICAL_DEVICE_ID
 
 
 class TestWebSocketTelemetryUpdates(unittest.TestCase):
@@ -63,7 +64,7 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
             self.assertEqual(update["data"]["device_count"], 1)
 
             dev = update["data"]["devices"][0]
-            self.assertEqual(dev["device_id"], "esp32-live-01")
+            self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
             self.assertEqual(dev["source"], "HARDWARE")
             self.assertEqual(dev["connectivity_state"], "ONLINE")
             self.assertEqual(dev["latest_readings"]["temperature_c"], 29.1)
@@ -85,8 +86,9 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
                 },
             )
             update_hw = ws.receive_json()
-            devs_hw = {d["device_id"]: d for d in update_hw["data"]["devices"]}
-            self.assertEqual(devs_hw["esp32-hw"]["source"], "HARDWARE")
+            dev_hw = update_hw["data"]["devices"][0]
+            self.assertEqual(dev_hw["device_id"], CANONICAL_DEVICE_ID)
+            self.assertEqual(dev_hw["source"], "HARDWARE")
 
             # Send SIMULATOR
             self.client.post(
@@ -98,8 +100,9 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
                 },
             )
             update_sim = ws.receive_json()
-            devs_sim = {d["device_id"]: d for d in update_sim["data"]["devices"]}
-            self.assertEqual(devs_sim["sim-soft"]["source"], "SIMULATOR")
+            dev_sim = update_sim["data"]["devices"][0]
+            self.assertEqual(dev_sim["device_id"], CANONICAL_DEVICE_ID)
+            self.assertEqual(dev_sim["source"], "SIMULATOR")
             self.assertEqual(len(update_sim["data"]["devices"]), 1)
 
     # 4. Invalid Ingestion Does Not Broadcast or Corrupt Stored State
@@ -129,7 +132,7 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
             update = ws.receive_json()
             self.assertEqual(update["event"], "telemetry_update")
             self.assertEqual(update["data"]["device_count"], 1)
-            self.assertEqual(update["data"]["devices"][0]["device_id"], "esp32-valid-after")
+            self.assertEqual(update["data"]["devices"][0]["device_id"], CANONICAL_DEVICE_ID)
 
     # 5. Multiple Clients Receive Live Updates Concurrently
     def test_multiple_clients_receive_updates(self):
@@ -156,8 +159,8 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
                 u2 = ws2.receive_json()
                 self.assertEqual(u1["event"], "telemetry_update")
                 self.assertEqual(u2["event"], "telemetry_update")
-                self.assertEqual(u1["data"]["devices"][0]["device_id"], "multi-cutter")
-                self.assertEqual(u2["data"]["devices"][0]["device_id"], "multi-cutter")
+                self.assertEqual(u1["data"]["devices"][0]["device_id"], CANONICAL_DEVICE_ID)
+                self.assertEqual(u2["data"]["devices"][0]["device_id"], CANONICAL_DEVICE_ID)
 
     # 6. Disconnecting One Client Does Not Break Ingestion or Other Clients
     def test_client_disconnect_resilience(self):
@@ -183,7 +186,7 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
             # ws1 successfully receives the update
             update = ws1.receive_json()
             self.assertEqual(update["event"], "telemetry_update")
-            self.assertEqual(update["data"]["devices"][0]["device_id"], "esp32-resilient")
+            self.assertEqual(update["data"]["devices"][0]["device_id"], CANONICAL_DEVICE_ID)
 
     # 7. Ping / Pong and Manual Refresh Messages
     def test_ping_pong_and_refresh(self):
@@ -230,7 +233,7 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
             stale_msg = ws.receive_json()
             self.assertEqual(stale_msg["event"], "stale_transition")
             dev = stale_msg["data"]["devices"][0]
-            self.assertEqual(dev["device_id"], "esp32-stale-detector")
+            self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
             self.assertEqual(dev["connectivity_state"], "STALE")
 
 

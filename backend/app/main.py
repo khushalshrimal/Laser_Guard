@@ -143,10 +143,10 @@ async def ingest_telemetry(
 
     readings = payload.readings if payload.readings is not None else SensorReadings()
 
-    device_id = payload.device_id or CANONICAL_DEVICE_ID
+    # Always enforce canonical machine identity for the single-machine architecture
     normalized_frame = NormalizedTelemetryFrame(
         source=payload.source,
-        device_id=device_id,
+        device_id=CANONICAL_DEVICE_ID,
         timestamp=normalized_timestamp,
         readings=readings,
     )
@@ -155,7 +155,7 @@ async def ingest_telemetry(
     registry.register_telemetry(normalized_frame, server_received_at=server_time)
 
     # 2. Evaluate real-time safety for the authoritative machine
-    dev_status = registry.get_device_status(device_id, now=server_time)
+    dev_status = registry.get_device_status(CANONICAL_DEVICE_ID, now=server_time)
     if dev_status:
         dev_safety = safety_engine.evaluate_device(dev_status, evaluated_at=server_time)
         dev_status.safety = dev_safety

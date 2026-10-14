@@ -64,7 +64,7 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         self.assertEqual(data["device_count"], 1)
 
         dev = data["devices"][0]
-        self.assertEqual(dev["device_id"], "esp32-safety-01")
+        self.assertEqual(dev["device_id"], "laser-cutter-01")
         self.assertEqual(dev["source"], "HARDWARE")
         self.assertEqual(dev["connectivity_state"], "ONLINE")
         self.assertLess(dev["seconds_since_last_seen"], 5.0)
@@ -136,11 +136,12 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         res2 = self.client.post("/ingest", json=bad_payload)
         self.assertEqual(res2.status_code, 422)
 
-        # Verify device state remains the previous valid reading (28.0, not 99.0)
+        # Verify device state remains the previous valid reading (28.0, not 99.0) under canonical ID
         status_res = self.client.get("/api/status")
         devices_by_id = {d["device_id"]: d for d in status_res.json()["devices"]}
-        self.assertEqual(devices_by_id["sim-cutter-1"]["latest_readings"]["temperature_c"], 28.0)
-        self.assertEqual(devices_by_id["sim-cutter-1"]["latest_readings"]["door_open"], False)
+        self.assertIn("laser-cutter-01", devices_by_id)
+        self.assertEqual(devices_by_id["laser-cutter-01"]["latest_readings"]["temperature_c"], 28.0)
+        self.assertEqual(devices_by_id["laser-cutter-01"]["latest_readings"]["door_open"], False)
 
     # 6. Device Becoming Stale After Threshold (HTTP Query Parameter)
     def test_device_stale_via_threshold_param(self):
@@ -167,7 +168,7 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         reg = DeviceRegistry(stale_threshold_seconds=10.0)
         frame = NormalizedTelemetryFrame(
             source=TelemetrySource.HARDWARE,
-            device_id="esp32-deterministic",
+            device_id="laser-cutter-01",
             timestamp="2026-10-14T10:00:00.000000Z",
             readings=SensorReadings(temperature_c=25.0),
         )
@@ -177,19 +178,19 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
 
         # 5 seconds later: <= 10s -> ONLINE
         t_plus_5 = t0 + timedelta(seconds=5)
-        st5 = reg.get_device_status("esp32-deterministic", now=t_plus_5)
+        st5 = reg.get_device_status("laser-cutter-01", now=t_plus_5)
         self.assertIsNotNone(st5)
         self.assertEqual(st5.connectivity_state, ConnectivityState.ONLINE)
         self.assertEqual(st5.seconds_since_last_seen, 5.0)
 
         # Exactly 10 seconds later: <= 10s -> ONLINE
         t_plus_10 = t0 + timedelta(seconds=10)
-        st10 = reg.get_device_status("esp32-deterministic", now=t_plus_10)
+        st10 = reg.get_device_status("laser-cutter-01", now=t_plus_10)
         self.assertEqual(st10.connectivity_state, ConnectivityState.ONLINE)
 
         # 10.5 seconds later: > 10s -> STALE
         t_plus_10_5 = t0 + timedelta(seconds=10.5)
-        st11 = reg.get_device_status("esp32-deterministic", now=t_plus_10_5)
+        st11 = reg.get_device_status("laser-cutter-01", now=t_plus_10_5)
         self.assertEqual(st11.connectivity_state, ConnectivityState.STALE)
         self.assertEqual(st11.seconds_since_last_seen, 10.5)
 
@@ -216,13 +217,74 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         self.client.post("/ingest", json={"source": "HARDWARE", "device_id": "esp-A"})
         self.client.post("/ingest", json={"source": "HARDWARE", "device_id": "esp-B"})
 
-        res = self.client.get("/api/status?device_id=esp-B")
+        res = self.client.get("/api/status?device_id=laser-cutter-01")
         data = res.json()
         self.assertEqual(data["device_count"], 1)
-        self.assertEqual(data["devices"][0]["device_id"], "esp-B")
+        self.assertEqual(data["devices"][0]["device_id"], "laser-cutter-01")
 
         res_none = self.client.get("/api/status?device_id=esp-nonexistent")
         self.assertEqual(res_none.json()["device_count"], 0)
+
+    # 10. Regression: Canonical Machine Identity Enforced Across Arbitrary Incoming IDs
+    def test_canonical_identity_enforced_across_arbitrary_ids(self):
+        # Ingest frame 1 with device_id="cutter-alpha"
+        res1 = self.client.post("/ingest", json={
+            "source": "HARDWARE",
+            "device_id": "cutter-alpha",
+            "readings": {"temperature_c": 27.0, "smoke_level": 8.0},
+        })
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res1.json()["data"]["device_id"], "laser-cutter-01")
+
+        # Stored and displayed as laser-cutter-01
+        status1 = self.client.get("/api/status").json()
+        self.assertEqual(status1["device_count"], 1)
+        self.assertEqual(status1["devices"][0]["device_id"], "laser-cutter-01")
+
+        # Ingest subsequent frame with device_id="cutter-beta"
+        res2 = self.client.post("/ingest", json={
+            "source": "SIMULATOR",
+            "device_id": "cutter-beta",
+            "readings": {"temperature_c": 31.0, "smoke_level": 9.5},
+        })
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.json()["data"]["device_id"], "laser-cutter-01")
+
+        # Machine count remains strictly 1 and still displays laser-cutter-01
+        status2 = self.client.get("/api/status").json()
+        self.assertEqual(status2["device_count"], 1)
+        self.assertEqual(status2["devices"][0]["device_id"], "laser-cutter-01")
+        self.assertEqual(status2["devices"][0]["source"], "SIMULATOR")
+        self.assertEqual(status2["devices"][0]["latest_readings"]["temperature_c"], 31.0)
+
+    # 11. Regression: WebSocket Snapshot and Broadcast Consistently Expose Canonical Identity
+    def test_websocket_snapshot_and_broadcast_canonical_identity(self):
+        # Ingest initial frame
+        self.client.post("/ingest", json={
+            "source": "HARDWARE",
+            "device_id": "cutter-gamma",
+            "readings": {"temperature_c": 23.0},
+        })
+
+        with self.client.websocket_connect("/ws/status") as ws:
+            # Initial snapshot must expose laser-cutter-01
+            initial = ws.receive_json()
+            self.assertEqual(initial["event"], "status_snapshot")
+            self.assertEqual(initial["data"]["device_count"], 1)
+            self.assertEqual(initial["data"]["devices"][0]["device_id"], "laser-cutter-01")
+
+            # Post frame with another arbitrary ID
+            self.client.post("/ingest", json={
+                "source": "SIMULATOR",
+                "device_id": "cutter-delta",
+                "readings": {"temperature_c": 28.0},
+            })
+
+            # Broadcast update must expose laser-cutter-01
+            update = ws.receive_json()
+            self.assertEqual(update["event"], "telemetry_update")
+            self.assertEqual(update["data"]["device_count"], 1)
+            self.assertEqual(update["data"]["devices"][0]["device_id"], "laser-cutter-01")
 
 
 if __name__ == "__main__":

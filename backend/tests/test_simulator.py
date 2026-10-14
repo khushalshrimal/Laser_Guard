@@ -19,6 +19,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from simulator.simulate_telemetry import generate_telemetry_payload
+from app.schemas import CANONICAL_DEVICE_ID
 
 
 class TestSimulatorScenarios(unittest.TestCase):
@@ -46,10 +47,11 @@ class TestSimulatorScenarios(unittest.TestCase):
         resp = self.client.post("/ingest", json=payload)
         self.assertEqual(resp.status_code, 200)
 
-        # Check safety assessment
-        status_resp = self.client.get("/api/status?device_id=sim-nominal")
+        # Check safety assessment for canonical machine
+        status_resp = self.client.get(f"/api/status?device_id={CANONICAL_DEVICE_ID}")
         self.assertEqual(status_resp.status_code, 200)
         dev = status_resp.json()["devices"][0]
+        self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
         self.assertEqual(dev["source"], "SIMULATOR")
         self.assertEqual(dev["safety"]["overall_severity"], "NORMAL")
         self.assertEqual(dev["safety"]["recommended_state"], "NORMAL_OPERATION")
@@ -60,8 +62,9 @@ class TestSimulatorScenarios(unittest.TestCase):
         resp = self.client.post("/ingest", json=payload)
         self.assertEqual(resp.status_code, 200)
 
-        status_resp = self.client.get("/api/status?device_id=sim-door")
+        status_resp = self.client.get(f"/api/status?device_id={CANONICAL_DEVICE_ID}")
         dev = status_resp.json()["devices"][0]
+        self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
         self.assertEqual(dev["safety"]["overall_severity"], "CRITICAL")
         self.assertEqual(dev["safety"]["recommended_state"], "STOP_RECOMMENDED")
         rule_ids = [v["rule_id"] for v in dev["safety"]["violations"]]
@@ -73,8 +76,9 @@ class TestSimulatorScenarios(unittest.TestCase):
         resp = self.client.post("/ingest", json=payload)
         self.assertEqual(resp.status_code, 200)
 
-        status_resp = self.client.get("/api/status?device_id=sim-coolant")
+        status_resp = self.client.get(f"/api/status?device_id={CANONICAL_DEVICE_ID}")
         dev = status_resp.json()["devices"][0]
+        self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
         self.assertEqual(dev["safety"]["overall_severity"], "CRITICAL")
         rule_ids = [v["rule_id"] for v in dev["safety"]["violations"]]
         self.assertIn("RULE_COOLANT_FLOW_LOW", rule_ids)
@@ -85,8 +89,9 @@ class TestSimulatorScenarios(unittest.TestCase):
         resp = self.client.post("/ingest", json=payload)
         self.assertEqual(resp.status_code, 200)
 
-        status_resp = self.client.get("/api/status?device_id=sim-cam")
+        status_resp = self.client.get(f"/api/status?device_id={CANONICAL_DEVICE_ID}")
         dev = status_resp.json()["devices"][0]
+        self.assertEqual(dev["device_id"], CANONICAL_DEVICE_ID)
         self.assertEqual(dev["safety"]["overall_severity"], "CRITICAL")
         rule_ids = [v["rule_id"] for v in dev["safety"]["violations"]]
         self.assertIn("RULE_PERIMETER_INTRUSION", rule_ids)

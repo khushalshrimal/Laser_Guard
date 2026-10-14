@@ -93,7 +93,7 @@ class DeviceRegistry:
 
         with self._lock:
             record = DeviceRecord(
-                device_id=frame.device_id,
+                device_id=self._canonical_device_id,
                 source=frame.source,
                 last_seen_at=server_received_at,
                 latest_frame=frame,
@@ -123,7 +123,11 @@ class DeviceRegistry:
             if not self._machine:
                 return None
 
-            if device_id is not None and device_id != self._machine.device_id:
+            if (
+                device_id is not None
+                and device_id != self._canonical_device_id
+                and device_id != self._machine.device_id
+            ):
                 return None
 
             rec = self._machine
@@ -135,7 +139,7 @@ class DeviceRegistry:
             )
 
             return DeviceStatus(
-                device_id=rec.device_id,
+                device_id=self._canonical_device_id,
                 source=rec.source,
                 connectivity_state=state,
                 last_seen=normalize_to_utc_iso(rec.last_seen_at),
@@ -168,7 +172,11 @@ class DeviceRegistry:
             statuses: List[DeviceStatus] = []
             if self._machine:
                 rec = self._machine
-                if filter_device_id is None or filter_device_id == rec.device_id:
+                if (
+                    filter_device_id is None
+                    or filter_device_id == self._canonical_device_id
+                    or filter_device_id == rec.device_id
+                ):
                     elapsed = max(0.0, (now - rec.last_seen_at).total_seconds())
                     state = (
                         ConnectivityState.ONLINE
@@ -177,7 +185,7 @@ class DeviceRegistry:
                     )
                     statuses.append(
                         DeviceStatus(
-                            device_id=rec.device_id,
+                            device_id=self._canonical_device_id,
                             source=rec.source,
                             connectivity_state=state,
                             last_seen=normalize_to_utc_iso(rec.last_seen_at),

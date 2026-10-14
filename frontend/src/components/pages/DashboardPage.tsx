@@ -23,8 +23,10 @@ interface DashboardPageProps {
   device: DeviceStatus | null;
   events: BlackboxEvent[];
   systemSource: TelemetrySource;
-  onTriggerScenario: (scenario: string) => Promise<void>;
+  onTriggerScenario: (scenario: string, overrides?: { machine_enabled?: boolean; machine_running?: boolean }) => Promise<void>;
   chartHistory: DataPoint[];
+  inChargePermission: boolean;
+  onTogglePermission: (enabled: boolean) => Promise<void>;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
@@ -33,8 +35,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   systemSource,
   onTriggerScenario,
   chartHistory,
+  inChargePermission,
+  onTogglePermission,
 }) => {
-  const [inChargePermission, setInChargePermission] = useState<boolean>(true);
   const [buzzerActive, setBuzzerActive] = useState<boolean>(false);
   const [cameraViewMode, setCameraViewMode] = useState<'2d' | '3d'>('2d');
 
@@ -43,6 +46,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const isRunning = readings.machine_running || false;
   const isStale = device?.connectivity_state === 'STALE';
   const severity = safety?.overall_severity || 'NORMAL';
+  const isUnauthorized = isRunning && !inChargePermission;
   const sensorValues = [
     readings.temperature_c,
     readings.smoke_level,
@@ -54,17 +58,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
   // Toggle in-charge permission
   const handleTogglePermission = async () => {
-    const next = !inChargePermission;
-    setInChargePermission(next);
-    await onTriggerScenario(next ? 'nominal' : 'unauthorized_running');
+    await onTogglePermission(!inChargePermission);
   };
 
   const handleStartCutting = async () => {
-    await onTriggerScenario('nominal');
+    if (!inChargePermission) {
+      // Permission is OFF: starting machine triggers UNAUTHORIZED RUNNING hazard
+      await onTriggerScenario('unauthorized_running', { machine_enabled: false, machine_running: true });
+    } else {
+      await onTriggerScenario('nominal', { machine_enabled: true, machine_running: true });
+    }
   };
 
   const handleStopCutting = async () => {
-    await onTriggerScenario('idle');
+    await onTriggerScenario('idle', { machine_enabled: inChargePermission, machine_running: false });
   };
 
   const handleEmergencyStop = async () => {
@@ -95,7 +102,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 <span className="text-[8px] font-mono text-cyan-400 font-bold">LASER BED</span>
               </div>
               {isRunning && (
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping absolute bottom-1" />
+                <div
+                  className={`w-1.5 h-1.5 rounded-full absolute bottom-1 animate-ping ${
+                    isUnauthorized ? 'bg-rose-500' : 'bg-amber-400'
+                  }`}
+                />
               )}
             </div>
             <div className="text-[10px] font-mono text-slate-400 mt-2">
@@ -126,24 +137,34 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             </div>
 
             <p className="text-xs text-slate-400">
-              {isRunning
+              {isUnauthorized
+                ? 'CRITICAL: Machine running WITHOUT in-charge authorization!'
+                : isRunning
                 ? 'Laser cutting actively in progress'
                 : 'Laser Cutter ready for operation'}
             </p>
 
             <div className="flex flex-wrap gap-2 pt-1">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-blue-500/15 text-blue-300 border border-blue-500/30 flex items-center gap-1">
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 ${
+                  inChargePermission
+                    ? 'bg-blue-500/15 text-blue-300 border border-blue-500/30'
+                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse font-bold'
+                }`}
+              >
                 <Check className="w-2.5 h-2.5" />
-                {inChargePermission ? 'Permission Granted' : 'Interlock Locked'}
+                {inChargePermission ? 'Permission Granted' : 'Interlock Locked (DISARMED)'}
               </span>
               <span
                 className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
-                  isRunning
+                  isUnauthorized
+                    ? 'bg-rose-600/30 text-rose-200 border-rose-500 font-bold animate-pulse'
+                    : isRunning
                     ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
                     : 'bg-slate-800 text-slate-400 border-slate-700'
                 }`}
               >
-                {isRunning ? 'Machine Running' : 'Machine Idle'}
+                {isUnauthorized ? 'UNAUTHORIZED RUNNING' : isRunning ? 'Machine Running' : 'Machine Idle'}
               </span>
             </div>
           </div>
@@ -186,7 +207,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
 
           <p className="text-[11px] text-slate-400 font-mono">
-            {inChargePermission ? 'Authorized operation allowed' : 'Emergency interlock disarmed'}
+            {inChargePermission ? 'Authorized operation allowed' : 'Emergency interlock disarmed & locked'}
           </p>
         </div>
 

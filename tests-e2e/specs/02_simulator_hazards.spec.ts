@@ -84,4 +84,31 @@ test.describe('Simulator Hazard Scenarios & Real-time Recovery', () => {
     await page.locator('aside nav button:has-text("Dashboard")').click();
     await expect(page.locator('text=No Flame Detected')).toBeVisible({ timeout: 5000 });
   });
+
+  test('disarming in-charge permission and starting machine triggers unauthorized running hazard', async ({ page }) => {
+    // On Dashboard, click In-Charge Permission OFF button
+    const offBtn = page.getByRole('button', { name: 'OFF', exact: true });
+    await expect(offBtn).toBeVisible();
+    await offBtn.click();
+
+    // Verify interlock is locked
+    await expect(page.locator('text=Interlock Locked (DISARMED)')).toBeVisible({ timeout: 5000 });
+
+    // Now attempt to start machine cutting while permission is OFF
+    const startBtn = page.getByRole('button', { name: 'Start (Sim)' });
+    await startBtn.click();
+
+    // Must trigger critical UNAUTHORIZED RUNNING
+    await expect(page.locator('header')).toContainText('SYSTEM HAZARD ALERT', { timeout: 5000 });
+    await expect(page.locator('text=UNAUTHORIZED RUNNING')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=CRITICAL: Machine running WITHOUT in-charge authorization!')).toBeVisible();
+
+    // Grant permission back ON
+    const onBtn = page.getByRole('button', { name: 'ON', exact: true });
+    await onBtn.click();
+
+    // Machine recovers to authorized operation
+    await expect(page.locator('header')).toContainText('System Online', { timeout: 5000 });
+    await expect(page.locator('text=Permission Granted')).toBeVisible();
+  });
 });

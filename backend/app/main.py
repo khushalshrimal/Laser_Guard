@@ -226,6 +226,7 @@ async def ingest_telemetry(
                 assessment=dev_safety,
                 connectivity_state=dev_status.connectivity_state,
                 timestamp=server_time,
+                device_status=dev_status,
             )
         except Exception as e:
             # Report storage error clearly rather than silently swallowing

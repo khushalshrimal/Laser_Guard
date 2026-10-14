@@ -31,7 +31,7 @@ export interface LaserGuardLiveState {
   lastError: string | null;
   wsUrl: string;
   refreshStatus: () => Promise<void>;
-  refreshEvents: (options?: EventQueryOptions) => Promise<void>;
+  refreshEvents: (options?: EventQueryOptions, isSilent?: boolean) => Promise<void>;
 }
 
 export function useLaserGuardLive(): LaserGuardLiveState {
@@ -68,9 +68,9 @@ export function useLaserGuardLive(): LaserGuardLiveState {
     }
   }, []);
 
-  const refreshEvents = useCallback(async (options: EventQueryOptions = {}) => {
+  const refreshEvents = useCallback(async (options: EventQueryOptions = {}, isSilent = false) => {
     activeEventFilterRef.current = options;
-    setEventsLoading(true);
+    if (!isSilent) setEventsLoading(true);
     try {
       const data = await fetchBlackboxEvents(options);
       if (!isUnmountedRef.current) {
@@ -82,7 +82,7 @@ export function useLaserGuardLive(): LaserGuardLiveState {
         console.warn('Failed to load blackbox events:', err);
       }
     } finally {
-      if (!isUnmountedRef.current) {
+      if (!isUnmountedRef.current && !isSilent) {
         setEventsLoading(false);
       }
     }
@@ -133,9 +133,9 @@ export function useLaserGuardLive(): LaserGuardLiveState {
               setSystemStatus(parsed.data);
               setLastUpdated(new Date().toLocaleTimeString());
 
-              // When an event happens (e.g. stale_transition or safety_alert), refresh recent event history
+              // When an event happens (e.g. stale_transition or safety_alert), refresh recent event history silently
               if (parsed.event === 'stale_transition' || parsed.event === 'safety_alert' || parsed.event === 'telemetry_update') {
-                refreshEvents(activeEventFilterRef.current);
+                refreshEvents(activeEventFilterRef.current, true);
               }
             }
           } catch (err) {
@@ -189,9 +189,15 @@ export function useLaserGuardLive(): LaserGuardLiveState {
       }
     }, 15000);
 
+    // High-frequency background event sync (every 2.5 seconds) to guarantee real-time blackbox freshness
+    const eventPollingInterval = setInterval(() => {
+      refreshEvents(activeEventFilterRef.current, true);
+    }, 2500);
+
     return () => {
       isUnmountedRef.current = true;
       clearInterval(fallbackInterval);
+      clearInterval(eventPollingInterval);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;

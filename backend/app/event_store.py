@@ -71,6 +71,8 @@ class EventStore:
         self._last_severities: Dict[str, SafetySeverity] = {}
         self._last_active_rules: Dict[str, Set[str]] = {}
         self._last_connectivity: Dict[str, ConnectivityState] = {}
+        self._last_machine_running: Dict[str, Optional[bool]] = {}
+        self._last_machine_enabled: Dict[str, Optional[bool]] = {}
         self.init_db()
 
     @property
@@ -198,6 +200,7 @@ class EventStore:
         assessment: DeviceSafetyAssessment,
         connectivity_state: ConnectivityState,
         timestamp: Optional[datetime] = None,
+        device_status: Optional[Any] = None,
     ) -> List[BlackboxEvent]:
         """
         Evaluate transitions for a device and record audit events only when state changes.
@@ -301,6 +304,77 @@ class EventStore:
             new_events.append(e)
 
         self._last_active_rules[device_id] = curr_rule_ids
+
+        # 4. Operational & Interlock State Transitions (Laser start/stop, permission changes)
+        if device_status is not None:
+            readings = getattr(device_status, "latest_readings", None)
+            if readings is not None:
+                cur_running = getattr(readings, "machine_running", None)
+                prev_running = self._last_machine_running.get(device_id)
+                if prev_running is not None and cur_running is not None and prev_running != cur_running:
+                    self._last_machine_running[device_id] = cur_running
+                    if cur_running:
+                        e = self.log_event(
+                            event_type="OPERATIONAL_STATE",
+                            device_id=device_id,
+                            source=source,
+                            severity=SafetySeverity.NORMAL,
+                            rule_id="MACHINE_STARTED",
+                            recommended_state=assessment.recommended_state,
+                            message="Laser cutter cutting cycle initiated (machine_running: true).",
+                            details={"machine_running": True, "machine_enabled": getattr(readings, "machine_enabled", None)},
+                            timestamp=timestamp,
+                        )
+                        new_events.append(e)
+                    else:
+                        e = self.log_event(
+                            event_type="OPERATIONAL_STATE",
+                            device_id=device_id,
+                            source=source,
+                            severity=SafetySeverity.NORMAL,
+                            rule_id="MACHINE_STOPPED",
+                            recommended_state=assessment.recommended_state,
+                            message="Laser cutter stopped / entered idle standby (machine_running: false).",
+                            details={"machine_running": False, "machine_enabled": getattr(readings, "machine_enabled", None)},
+                            timestamp=timestamp,
+                        )
+                        new_events.append(e)
+                elif prev_running is None and cur_running is not None:
+                    self._last_machine_running[device_id] = cur_running
+
+                cur_enabled = getattr(readings, "machine_enabled", None)
+                prev_enabled = self._last_machine_enabled.get(device_id)
+                if prev_enabled is not None and cur_enabled is not None and prev_enabled != cur_enabled:
+                    self._last_machine_enabled[device_id] = cur_enabled
+                    if cur_enabled:
+                        e = self.log_event(
+                            event_type="INTERLOCK_STATE",
+                            device_id=device_id,
+                            source=source,
+                            severity=SafetySeverity.NORMAL,
+                            rule_id="PERMISSION_GRANTED",
+                            recommended_state=assessment.recommended_state,
+                            message="In-Charge safety permission ARMED (machine_enabled: true). Authorized cutting allowed.",
+                            details={"machine_enabled": True},
+                            timestamp=timestamp,
+                        )
+                        new_events.append(e)
+                    else:
+                        e = self.log_event(
+                            event_type="INTERLOCK_STATE",
+                            device_id=device_id,
+                            source=source,
+                            severity=SafetySeverity.WARNING,
+                            rule_id="PERMISSION_REVOKED",
+                            recommended_state=RecommendedMachineState.STOP_RECOMMENDED if cur_running else RecommendedMachineState.NORMAL_OPERATION,
+                            message="In-Charge safety permission DISARMED / LOCKED (machine_enabled: false). Machine interlock engaged.",
+                            details={"machine_enabled": False, "machine_running": cur_running},
+                            timestamp=timestamp,
+                        )
+                        new_events.append(e)
+                elif prev_enabled is None and cur_enabled is not None:
+                    self._last_machine_enabled[device_id] = cur_enabled
+
         return new_events
 
     def query_events(

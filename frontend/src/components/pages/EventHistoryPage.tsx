@@ -40,6 +40,11 @@ export const EventHistoryPage: React.FC<EventHistoryPageProps> = ({
     }
   };
 
+  // Instantly fetch newest audit records when page is mounted or severity changes
+  React.useEffect(() => {
+    onRefresh(selectedSeverity === 'ALL' ? {} : { severity: selectedSeverity });
+  }, [selectedSeverity, onRefresh]);
+
   const filteredEvents = events.filter((ev) => {
     if (!searchTerm) return true;
     const matchMsg = ev.message.toLowerCase().includes(searchTerm.toLowerCase());

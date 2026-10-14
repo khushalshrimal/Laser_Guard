@@ -3,6 +3,7 @@ import os
 import urllib.request
 import json
 
+sys.path.insert(0, os.path.abspath('..'))
 sys.path.insert(0, os.path.abspath('.'))
 from simulator.simulate_telemetry import generate_telemetry_payload, send_telemetry
 
@@ -24,7 +25,7 @@ print("LASERGUARD AI - AUTOMATED SCENARIO INTEGRATION CHECK")
 print("=" * 80)
 
 for mode, exp_sev, exp_state, exp_rule in scenarios:
-    dev_id = f"qa-{mode}-01"
+    dev_id = "laser-cutter-01"
     payload = generate_telemetry_payload(mode=mode, device_id=dev_id)
     send_res = send_telemetry(payload, url="http://127.0.0.1:8000/ingest")
     
@@ -33,7 +34,7 @@ for mode, exp_sev, exp_state, exp_rule in scenarios:
     with urllib.request.urlopen(status_req) as resp:
         status_data = json.loads(resp.read().decode("utf-8"))
     
-    device_status = next((d for d in status_data["devices"] if d["device_id"] == dev_id), None)
+    device_status = status_data["devices"][0] if status_data["devices"] else None
     actual_sev = device_status["safety"]["overall_severity"] if device_status else "MISSING"
     actual_state = device_status["safety"]["recommended_state"] if device_status else "MISSING"
     violations = [v["rule_id"] for v in device_status["safety"].get("violations", [])] if device_status else []

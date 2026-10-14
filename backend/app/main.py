@@ -21,6 +21,7 @@ from app.schemas import (
     SafetySeverity,
     SafetyThresholdsConfig,
     normalize_to_utc_iso,
+    CANONICAL_DEVICE_ID,
 )
 from app.registry import DeviceRegistry, get_device_registry
 from app.websocket_manager import WebSocketManager, get_ws_manager
@@ -142,18 +143,19 @@ async def ingest_telemetry(
 
     readings = payload.readings if payload.readings is not None else SensorReadings()
 
+    device_id = payload.device_id or CANONICAL_DEVICE_ID
     normalized_frame = NormalizedTelemetryFrame(
         source=payload.source,
-        device_id=payload.device_id,
+        device_id=device_id,
         timestamp=normalized_timestamp,
         readings=readings,
     )
 
-    # 1. Update in-memory device registry with latest valid frame
+    # 1. Update in-memory device registry with latest valid frame for the single machine
     registry.register_telemetry(normalized_frame, server_received_at=server_time)
 
-    # 2. Evaluate real-time safety for this device
-    dev_status = registry.get_device_status(normalized_frame.device_id, now=server_time)
+    # 2. Evaluate real-time safety for the authoritative machine
+    dev_status = registry.get_device_status(device_id, now=server_time)
     if dev_status:
         dev_safety = safety_engine.evaluate_device(dev_status, evaluated_at=server_time)
         dev_status.safety = dev_safety

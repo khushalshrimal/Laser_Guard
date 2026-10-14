@@ -74,7 +74,7 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
   const samplePayloads: Record<string, Record<string, unknown>> = {
     nominal: {
       source: 'SIMULATOR',
-      device_id: 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: false,
         flame_detected: false,
@@ -88,7 +88,7 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
     },
     fire: {
       source: 'SIMULATOR',
-      device_id: 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: false,
         flame_detected: true,
@@ -101,7 +101,7 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
     },
     door_trip: {
       source: 'SIMULATOR',
-      device_id: 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: true,
         flame_detected: false,
@@ -114,7 +114,7 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
     },
     coolant_fail: {
       source: 'SIMULATOR',
-      device_id: 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: false,
         flame_detected: false,
@@ -127,7 +127,7 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
     },
     overheat: {
       source: 'SIMULATOR',
-      device_id: 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: false,
         flame_detected: false,
@@ -140,7 +140,7 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
     },
     camera_intrusion: {
       source: 'SIMULATOR',
-      device_id: 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: false,
         flame_detected: false,

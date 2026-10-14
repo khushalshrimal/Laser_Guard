@@ -339,10 +339,7 @@ class SafetyEngine:
             assessments.append(assessment)
 
         if assessments:
-            overall_system_severity = max(
-                (a.overall_severity for a in assessments),
-                key=lambda s: SEVERITY_ORDER[s],
-            )
+            overall_system_severity = assessments[0].overall_severity
         else:
             overall_system_severity = SafetySeverity.NORMAL
 

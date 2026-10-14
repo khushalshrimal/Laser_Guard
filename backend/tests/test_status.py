@@ -78,40 +78,31 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
             "device_id": "esp32-unit-1",
             "readings": {"temperature_c": 30.0},
         }
+        self.client.post("/ingest", json=payload_hw)
+        res_hw = self.client.get("/api/status").json()
+        self.assertEqual(res_hw["device_count"], 1)
+        self.assertEqual(res_hw["devices"][0]["source"], "HARDWARE")
+
         payload_sim = {
             "source": "SIMULATOR",
             "device_id": "sim-unit-2",
             "readings": {"temperature_c": 21.0},
         }
-
-        self.client.post("/ingest", json=payload_hw)
         self.client.post("/ingest", json=payload_sim)
+        res_sim = self.client.get("/api/status").json()
+        self.assertEqual(res_sim["device_count"], 1)
+        self.assertEqual(res_sim["devices"][0]["source"], "SIMULATOR")
 
-        status_res = self.client.get("/api/status")
-        data = status_res.json()
-        self.assertEqual(data["device_count"], 2)
-
-        devices_by_id = {d["device_id"]: d for d in data["devices"]}
-        self.assertEqual(devices_by_id["esp32-unit-1"]["source"], "HARDWARE")
-        self.assertEqual(devices_by_id["sim-unit-2"]["source"], "SIMULATOR")
-
-    # 4. Two Devices Maintaining Independent States
+    # 4. Single Machine Authoritative State Updated on Subsequent Ingestions
     def test_two_devices_maintain_independent_states(self):
         dev1_payload = {
             "source": "HARDWARE",
             "device_id": "device-alpha",
             "readings": {"temperature_c": 45.0, "smoke_level": 12.0},
         }
-        dev2_payload = {
-            "source": "HARDWARE",
-            "device_id": "device-beta",
-            "readings": {"temperature_c": 22.0, "smoke_level": 1.0},
-        }
-
         self.client.post("/ingest", json=dev1_payload)
-        self.client.post("/ingest", json=dev2_payload)
 
-        # Update only device-alpha
+        # Update the machine
         dev1_update = {
             "source": "HARDWARE",
             "device_id": "device-alpha",
@@ -120,15 +111,11 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         self.client.post("/ingest", json=dev1_update)
 
         status_res = self.client.get("/api/status")
-        devices_by_id = {d["device_id"]: d for d in status_res.json()["devices"]}
-
-        # Device Alpha should have updated readings
-        self.assertEqual(devices_by_id["device-alpha"]["latest_readings"]["temperature_c"], 52.0)
-        self.assertEqual(devices_by_id["device-alpha"]["latest_readings"]["smoke_level"], 25.0)
-
-        # Device Beta must remain completely unchanged
-        self.assertEqual(devices_by_id["device-beta"]["latest_readings"]["temperature_c"], 22.0)
-        self.assertEqual(devices_by_id["device-beta"]["latest_readings"]["smoke_level"], 1.0)
+        data = status_res.json()
+        self.assertEqual(data["device_count"], 1)
+        dev = data["devices"][0]
+        self.assertEqual(dev["latest_readings"]["temperature_c"], 52.0)
+        self.assertEqual(dev["latest_readings"]["smoke_level"], 25.0)
 
     # 5. Invalid Ingestion Does Not Corrupt or Overwrite State
     def test_invalid_ingestion_preserves_previous_state(self):
@@ -229,10 +216,10 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         self.client.post("/ingest", json={"source": "HARDWARE", "device_id": "esp-A"})
         self.client.post("/ingest", json={"source": "HARDWARE", "device_id": "esp-B"})
 
-        res = self.client.get("/api/status?device_id=esp-A")
+        res = self.client.get("/api/status?device_id=esp-B")
         data = res.json()
         self.assertEqual(data["device_count"], 1)
-        self.assertEqual(data["devices"][0]["device_id"], "esp-A")
+        self.assertEqual(data["devices"][0]["device_id"], "esp-B")
 
         res_none = self.client.get("/api/status?device_id=esp-nonexistent")
         self.assertEqual(res_none.json()["device_count"], 0)

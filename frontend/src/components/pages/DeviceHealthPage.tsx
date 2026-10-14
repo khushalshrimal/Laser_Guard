@@ -37,7 +37,7 @@ export const DeviceHealthPage: React.FC<DeviceHealthPageProps> = ({
             <div className="flex items-center gap-2">
               <Cpu className="w-4 h-4 text-purple-400" />
               <span className="text-xs font-bold text-white font-mono">
-                {device?.device_id || 'Device (ESP32)'}
+                {device?.device_id || 'laser-cutter-01'}
               </span>
             </div>
             <span

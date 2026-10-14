@@ -82,9 +82,13 @@ class SensorReadings(BaseModel):
     )
 
 
+CANONICAL_DEVICE_ID = "laser-cutter-01"
+
+
 class TelemetryPayload(BaseModel):
     """
     Ingestion payload expected at POST /ingest from ESP32 hardware or simulator.
+    Single-machine architecture: defaults to the canonical machine identity.
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -96,7 +100,7 @@ class TelemetryPayload(BaseModel):
         ...,
         min_length=1,
         max_length=128,
-        description="Non-empty unique hardware or simulator device identifier (e.g., 'esp32-cutter-01')."
+        description="Canonical machine identifier (e.g., 'laser-cutter-01')."
     )
     timestamp: Optional[datetime] = Field(
         default=None,

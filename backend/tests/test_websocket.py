@@ -100,7 +100,7 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
             update_sim = ws.receive_json()
             devs_sim = {d["device_id"]: d for d in update_sim["data"]["devices"]}
             self.assertEqual(devs_sim["sim-soft"]["source"], "SIMULATOR")
-            self.assertEqual(devs_sim["esp32-hw"]["source"], "HARDWARE")
+            self.assertEqual(len(update_sim["data"]["devices"]), 1)
 
     # 4. Invalid Ingestion Does Not Broadcast or Corrupt Stored State
     def test_invalid_ingest_does_not_broadcast(self):

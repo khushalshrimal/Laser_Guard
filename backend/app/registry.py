@@ -1,6 +1,7 @@
 """
-LaserGuard AI - In-Memory Device Registry & Stale Detection
-Tracks the latest accepted telemetry frame and server reception time per device.
+LaserGuard AI - Single-Machine Device Registry & Stale Detection
+Maintains the authoritative machine state and latest telemetry snapshot.
+Prevents creating or switching between multiple logical machines.
 Calculates deterministic online/stale status without persistent storage (resets on restart).
 """
 
@@ -8,9 +9,10 @@ import os
 import threading
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from app.schemas import (
+    CANONICAL_DEVICE_ID,
     TelemetrySource,
     NormalizedTelemetryFrame,
     ConnectivityState,
@@ -43,15 +45,24 @@ class DeviceRecord:
 
 class DeviceRegistry:
     """
-    Thread-safe in-memory device registry.
-    Stores the latest validated telemetry per device_id.
-    Note: Resets whenever the backend application process restarts.
+    Thread-safe single-machine device registry for LaserGuard AI.
+    Maintains one authoritative machine state and latest telemetry snapshot.
+    Prevents the application from creating or switching between multiple logical machines.
     """
 
-    def __init__(self, stale_threshold_seconds: Optional[float] = None):
+    def __init__(
+        self,
+        stale_threshold_seconds: Optional[float] = None,
+        canonical_device_id: str = CANONICAL_DEVICE_ID,
+    ):
         self._lock = threading.Lock()
-        self._devices: Dict[str, DeviceRecord] = {}
+        self._canonical_device_id = canonical_device_id
+        self._machine: Optional[DeviceRecord] = None
         self._stale_threshold_seconds = stale_threshold_seconds
+
+    @property
+    def canonical_device_id(self) -> str:
+        return self._canonical_device_id
 
     @property
     def stale_threshold(self) -> float:
@@ -69,8 +80,9 @@ class DeviceRegistry:
         server_received_at: Optional[datetime] = None,
     ) -> DeviceRecord:
         """
-        Record newly validated telemetry for a device.
+        Record newly validated telemetry for the single authoritative machine.
         Uses the server receive time to track connectivity independently of client clocks.
+        Always updates the single authoritative machine state.
         """
         if server_received_at is None:
             server_received_at = datetime.now(timezone.utc)
@@ -86,18 +98,18 @@ class DeviceRegistry:
                 last_seen_at=server_received_at,
                 latest_frame=frame,
             )
-            self._devices[frame.device_id] = record
+            # Exactly one machine state is maintained; subsequent ingestions update this single machine
+            self._machine = record
             return record
 
     def get_device_status(
         self,
-        device_id: str,
+        device_id: Optional[str] = None,
         now: Optional[datetime] = None,
         threshold: Optional[float] = None,
     ) -> Optional[DeviceStatus]:
         """
-        Retrieve connectivity and latest readings for a single device.
-        Accepts an explicit 'now' datetime for deterministic testing.
+        Retrieve connectivity and latest readings for the single authoritative machine.
         """
         effective_threshold = threshold if threshold is not None else self.stale_threshold
         if now is None:
@@ -108,11 +120,14 @@ class DeviceRegistry:
             now = now.astimezone(timezone.utc)
 
         with self._lock:
-            record = self._devices.get(device_id)
-            if not record:
+            if not self._machine:
                 return None
 
-            elapsed = max(0.0, (now - record.last_seen_at).total_seconds())
+            if device_id is not None and device_id != self._machine.device_id:
+                return None
+
+            rec = self._machine
+            elapsed = max(0.0, (now - rec.last_seen_at).total_seconds())
             state = (
                 ConnectivityState.ONLINE
                 if elapsed <= effective_threshold
@@ -120,13 +135,13 @@ class DeviceRegistry:
             )
 
             return DeviceStatus(
-                device_id=record.device_id,
-                source=record.source,
+                device_id=rec.device_id,
+                source=rec.source,
                 connectivity_state=state,
-                last_seen=normalize_to_utc_iso(record.last_seen_at),
+                last_seen=normalize_to_utc_iso(rec.last_seen_at),
                 seconds_since_last_seen=round(elapsed, 2),
                 stale_threshold_seconds=effective_threshold,
-                latest_readings=record.latest_frame.readings,
+                latest_readings=rec.latest_frame.readings,
             )
 
     def get_system_status(
@@ -136,8 +151,8 @@ class DeviceRegistry:
         filter_device_id: Optional[str] = None,
     ) -> SystemStatusResponse:
         """
-        Generate full system status including all tracked devices.
-        Accepts an explicit 'now' datetime for deterministic testing.
+        Generate system status for the single authoritative machine.
+        Maintains at most one machine in the devices list.
         """
         effective_threshold = threshold if threshold is not None else self.stale_threshold
         if now is None:
@@ -150,30 +165,27 @@ class DeviceRegistry:
         server_time_str = normalize_to_utc_iso(now)
 
         with self._lock:
-            device_keys = sorted(self._devices.keys())
-            if filter_device_id:
-                device_keys = [k for k in device_keys if k == filter_device_id]
-
             statuses: List[DeviceStatus] = []
-            for key in device_keys:
-                rec = self._devices[key]
-                elapsed = max(0.0, (now - rec.last_seen_at).total_seconds())
-                state = (
-                    ConnectivityState.ONLINE
-                    if elapsed <= effective_threshold
-                    else ConnectivityState.STALE
-                )
-                statuses.append(
-                    DeviceStatus(
-                        device_id=rec.device_id,
-                        source=rec.source,
-                        connectivity_state=state,
-                        last_seen=normalize_to_utc_iso(rec.last_seen_at),
-                        seconds_since_last_seen=round(elapsed, 2),
-                        stale_threshold_seconds=effective_threshold,
-                        latest_readings=rec.latest_frame.readings,
+            if self._machine:
+                rec = self._machine
+                if filter_device_id is None or filter_device_id == rec.device_id:
+                    elapsed = max(0.0, (now - rec.last_seen_at).total_seconds())
+                    state = (
+                        ConnectivityState.ONLINE
+                        if elapsed <= effective_threshold
+                        else ConnectivityState.STALE
                     )
-                )
+                    statuses.append(
+                        DeviceStatus(
+                            device_id=rec.device_id,
+                            source=rec.source,
+                            connectivity_state=state,
+                            last_seen=normalize_to_utc_iso(rec.last_seen_at),
+                            seconds_since_last_seen=round(elapsed, 2),
+                            stale_threshold_seconds=effective_threshold,
+                            latest_readings=rec.latest_frame.readings,
+                        )
+                    )
 
             return SystemStatusResponse(
                 status="ok",
@@ -184,9 +196,9 @@ class DeviceRegistry:
             )
 
     def clear(self) -> None:
-        """Clear all registered devices (in-memory reset)."""
+        """Clear the single registered machine (in-memory reset)."""
         with self._lock:
-            self._devices.clear()
+            self._machine = None
 
 
 # Global singleton registry instance used by the FastAPI app

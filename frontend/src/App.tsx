@@ -53,13 +53,12 @@ export const App: React.FC = () => {
     loadHealth();
   }, [loadHealth]);
 
-  // Update chart history when fresh telemetry arrives
-  const devices: DeviceStatus[] = systemStatus?.devices || [];
-  const primaryDevice = devices.length > 0 ? devices[0] : null;
+  // Single authoritative machine state
+  const machine: DeviceStatus | null = systemStatus?.devices?.[0] || null;
 
   useEffect(() => {
-    if (primaryDevice?.latest_readings) {
-      const r = primaryDevice.latest_readings;
+    if (machine?.latest_readings) {
+      const r = machine.latest_readings;
       const now = new Date();
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -76,22 +75,14 @@ export const App: React.FC = () => {
         return next.slice(-25); // retain last 25 ticks
       });
     }
-  }, [primaryDevice?.last_seen, primaryDevice?.latest_readings]);
+  }, [machine?.last_seen, machine?.latest_readings]);
 
-  // Overall system severity calculation
-  const hasCritical = devices.some((d) => d.safety?.overall_severity === 'CRITICAL');
-  const hasWarning = devices.some(
-    (d) => d.safety?.overall_severity === 'WARNING' || d.connectivity_state === 'STALE'
-  );
-  const systemSeverity: SafetySeverity = hasCritical
-    ? 'CRITICAL'
-    : hasWarning
-    ? 'WARNING'
-    : devices.length > 0
-    ? 'NORMAL'
-    : 'NORMAL';
+  // Authoritative machine safety severity
+  const systemSeverity: SafetySeverity =
+    machine?.safety?.overall_severity ||
+    (machine?.connectivity_state === 'STALE' ? 'WARNING' : 'NORMAL');
 
-  // Triggering a scenario via POST /ingest
+  // Triggering a scenario via POST /ingest for the canonical single machine
   const handleTriggerScenario = async (scenario: string) => {
     const isRunning = scenario !== 'idle';
     const isFire = scenario === 'fire';
@@ -104,7 +95,7 @@ export const App: React.FC = () => {
 
     const payload = {
       source: systemSource,
-      device_id: primaryDevice?.device_id || 'sim-cutter-01',
+      device_id: 'laser-cutter-01',
       readings: {
         door_open: isDoorTrip,
         flame_detected: isFire,
@@ -171,7 +162,7 @@ export const App: React.FC = () => {
         <main className="flex-1 p-6 overflow-y-auto">
           {activePage === 'dashboard' && (
             <DashboardPage
-              device={primaryDevice}
+              device={machine}
               events={events}
               systemSource={systemSource}
               onTriggerScenario={handleTriggerScenario}
@@ -181,7 +172,7 @@ export const App: React.FC = () => {
 
           {activePage === 'live-readings' && (
             <LiveReadingsPage
-              device={primaryDevice}
+              device={machine}
               chartHistory={chartHistory}
               systemSource={systemSource}
             />
@@ -202,7 +193,7 @@ export const App: React.FC = () => {
 
           {activePage === 'device-health' && (
             <DeviceHealthPage
-              device={primaryDevice}
+              device={machine}
               healthData={healthData}
               connectionState={connectionState}
               systemSource={systemSource}

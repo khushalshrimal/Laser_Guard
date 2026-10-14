@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 DEFAULT_INGEST_URL = "http://127.0.0.1:8000/ingest"
-DEFAULT_DEVICE_ID = "sim-cutter-01"
+DEFAULT_DEVICE_ID = "laser-cutter-01"
 
 
 def generate_telemetry_payload(

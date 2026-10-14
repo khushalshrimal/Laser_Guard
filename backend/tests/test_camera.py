@@ -23,6 +23,7 @@ from app.camera_service import (
     check_bbox_intersects_roi,
     get_camera_service,
     reset_camera_service,
+    get_default_camera_index,
 )
 
 
@@ -99,6 +100,25 @@ class TestCameraServiceUnit(unittest.TestCase):
         self.assertEqual(status.actual_fps, 0.0)
         self.assertIsNone(status.latest_detection)
         self.assertIsNone(status.error_message)
+
+    def test_default_camera_index_is_one(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CAMERA_DEVICE_INDEX", None)
+            svc = CameraService()
+            self.assertEqual(svc.get_status().device_index, 1)
+            self.assertEqual(get_default_camera_index(), 1)
+
+    def test_camera_device_index_env_override(self):
+        with patch.dict(os.environ, {"CAMERA_DEVICE_INDEX": "2"}):
+            svc = CameraService()
+            self.assertEqual(svc.get_status().device_index, 2)
+            self.assertEqual(get_default_camera_index(), 2)
+
+    def test_camera_device_index_invalid_env_fallback(self):
+        with patch.dict(os.environ, {"CAMERA_DEVICE_INDEX": "not_an_int"}):
+            self.assertEqual(get_default_camera_index(), 1)
+        with patch.dict(os.environ, {"CAMERA_DEVICE_INDEX": "-3"}):
+            self.assertEqual(get_default_camera_index(), 1)
 
     def test_graceful_missing_dependencies(self):
         with patch.object(CameraService, "is_available", False):

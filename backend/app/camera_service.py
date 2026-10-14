@@ -149,6 +149,21 @@ def check_bbox_intersects_roi(bbox: HandBBox, roi: RoiConfig) -> bool:
     return (overlap_x > 0.0) and (overlap_y > 0.0)
 
 
+def get_default_camera_index() -> int:
+    """
+    Retrieve default camera device index.
+    Defaults to 1 (external USB webcam, e.g. Logitech Webcam C170),
+    with override via CAMERA_DEVICE_INDEX environment variable.
+    """
+    raw = os.getenv("CAMERA_DEVICE_INDEX", "1")
+    try:
+        val = int(raw)
+        return val if val >= 0 else 1
+    except (ValueError, TypeError):
+        logger.warning("Invalid CAMERA_DEVICE_INDEX '%s'. Falling back to default index 1.", raw)
+        return 1
+
+
 class CameraService:
     """
     Modular thread-safe Camera Service.
@@ -158,12 +173,14 @@ class CameraService:
 
     def __init__(
         self,
-        device_index: int = 0,
+        device_index: Optional[int] = None,
         target_fps: float = 10.0,
         roi: Optional[RoiConfig] = None,
         model_path: Optional[str] = None,
     ):
-        self._device_index = device_index
+        self._device_index = (
+            device_index if device_index is not None else get_default_camera_index()
+        )
         self._target_fps = target_fps
         self._roi = roi or RoiConfig()
         self._model_path = model_path or self._resolve_default_model_path()

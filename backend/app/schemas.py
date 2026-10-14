@@ -4,7 +4,7 @@ Defines validated data models shared between HARDWARE (ESP32) and SIMULATOR.
 """
 
 from enum import Enum
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field, StrictBool, ConfigDict, field_validator
 
@@ -137,6 +137,64 @@ class TelemetryIngestResponse(BaseModel):
     data: NormalizedTelemetryFrame = Field(description="Normalized accepted payload")
 
 
+class SafetySeverity(str, Enum):
+    """
+    Standard safety severity classification.
+    Precedence: CRITICAL > WARNING > UNKNOWN > NORMAL.
+    """
+    CRITICAL = "CRITICAL"
+    WARNING = "WARNING"
+    UNKNOWN = "UNKNOWN"
+    NORMAL = "NORMAL"
+
+
+class RecommendedMachineState(str, Enum):
+    """
+    Recommended operational safety action calculated by the rules engine.
+    Note: Software recommendation only; does NOT actuate physical hardware relays.
+    """
+    STOP_RECOMMENDED = "STOP_RECOMMENDED"
+    INVESTIGATION_RECOMMENDED = "INVESTIGATION_RECOMMENDED"
+    NORMAL_OPERATION = "NORMAL_OPERATION"
+    UNKNOWN = "UNKNOWN"
+
+
+class SafetyViolation(BaseModel):
+    """
+    Structured description of a triggered safety rule.
+    """
+    rule_id: str = Field(description="Stable rule identifier, e.g. 'RULE_FIRE_DETECTED'")
+    severity: SafetySeverity = Field(description="Severity tier: CRITICAL, WARNING, or UNKNOWN")
+    message: str = Field(description="Human-readable safety alert explanation")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Diagnostic data relevant to rule trigger")
+
+
+class SafetyThresholdsConfig(BaseModel):
+    """
+    Configured numeric thresholds used during rule evaluation.
+    """
+    high_temperature_c: float = Field(default=60.0, ge=0.0, le=500.0, description="Warning temperature threshold in °C (demo setting)")
+    elevated_smoke: float = Field(default=50.0, ge=0.0, le=1000.0, description="Warning smoke index threshold (demo setting)")
+    stale_threshold_seconds: float = Field(default=10.0, ge=0.1, le=3600.0, description="Stale data threshold in seconds")
+
+
+class DeviceSafetyAssessment(BaseModel):
+    """
+    Safety assessment evaluation for an individual laser device.
+    """
+    device_id: str = Field(description="Device identifier")
+    source: TelemetrySource = Field(description="Origin source: HARDWARE or SIMULATOR")
+    overall_severity: SafetySeverity = Field(description="Highest precedence severity among all violations")
+    recommended_state: RecommendedMachineState = Field(description="Recommended machine operational state")
+    violations: List[SafetyViolation] = Field(default_factory=list, description="List of triggered safety rule violations")
+    stale: bool = Field(description="Whether stale data condition contributed to this evaluation")
+    evaluated_at: str = Field(description="UTC timestamp when evaluation occurred (ISO 8601)")
+    disclaimer: str = Field(
+        default="Software decision-support assessment only. Not a certified hardware safety controller. No physical e-stop actuation performed.",
+        description="Safety notice regarding software assessment limitations"
+    )
+
+
 class DeviceStatus(BaseModel):
     """
     Status and latest state for an individual tracked device.
@@ -148,6 +206,10 @@ class DeviceStatus(BaseModel):
     seconds_since_last_seen: float = Field(description="Elapsed seconds since last server reception")
     stale_threshold_seconds: float = Field(description="Active stale detection threshold in seconds")
     latest_readings: SensorReadings = Field(description="Latest valid sensor readings reported by this device")
+    safety: Optional[DeviceSafetyAssessment] = Field(
+        default=None,
+        description="Optional safety evaluation for this device"
+    )
 
 
 class SystemStatusResponse(BaseModel):
@@ -165,13 +227,29 @@ class SystemStatusResponse(BaseModel):
     )
 
 
+class SystemSafetyResponse(BaseModel):
+    """
+    Response schema for GET /api/safety returning multi-device safety evaluation.
+    """
+    status: str = Field(default="ok", description="API response status")
+    evaluated_at: str = Field(description="UTC timestamp of safety evaluation")
+    device_count: int = Field(description="Total number of evaluated devices")
+    overall_system_severity: SafetySeverity = Field(description="Worst-case severity across all devices (NORMAL if empty or clean)")
+    assessments: List[DeviceSafetyAssessment] = Field(description="List of device safety assessments")
+    thresholds: SafetyThresholdsConfig = Field(description="Active safety thresholds used during evaluation")
+    disclaimer: str = Field(
+        default="Software decision-support assessment only. Not a certified hardware safety controller. No physical e-stop actuation performed.",
+        description="Safety notice regarding software assessment limitations"
+    )
+
+
 class WebSocketMessage(BaseModel):
     """
     Standard envelope format published to connected WebSocket clients at /ws/status.
     Reuses SystemStatusResponse directly to guarantee a single source of truth.
     """
     event: str = Field(
-        description="Event classification: 'status_snapshot' (on connect), 'telemetry_update' (on ingest), or 'stale_transition' (on timeout)"
+        description="Event classification: 'status_snapshot' (on connect), 'telemetry_update' (on ingest), 'stale_transition' (on timeout), or 'safety_alert' (on critical hazard)"
     )
     data: SystemStatusResponse = Field(
         description="Current system status payload including tracked devices and connectivity health"

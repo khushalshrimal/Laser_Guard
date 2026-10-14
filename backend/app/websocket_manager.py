@@ -6,7 +6,7 @@ and automatic stale-transition notifications for /ws/status.
 
 import asyncio
 import logging
-from typing import Set, Dict, Optional, List
+from typing import Set, Dict, Optional, List, Any
 from datetime import datetime
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -37,16 +37,24 @@ class WebSocketManager:
         """Return the count of currently connected WebSocket clients."""
         return len(self._active_connections)
 
-    async def connect(self, websocket: WebSocket, registry: DeviceRegistry) -> None:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        registry: DeviceRegistry,
+        safety_engine: Optional[Any] = None,
+    ) -> None:
         """
         Accept a new client connection, record it, and immediately deliver
-        an initial system status snapshot.
+        an initial system status snapshot with safety assessment.
         """
         await websocket.accept()
         self._active_connections.add(websocket)
 
         # Generate current snapshot from the single source of truth (registry)
         snapshot: SystemStatusResponse = registry.get_system_status()
+        if safety_engine:
+            for dev in snapshot.devices:
+                dev.safety = safety_engine.evaluate_device(dev)
 
         # Update last known states
         for dev in snapshot.devices:
@@ -90,15 +98,20 @@ class WebSocketManager:
     async def broadcast_status(
         self,
         registry: DeviceRegistry,
+        safety_engine: Optional[Any] = None,
         event: str = "telemetry_update",
     ) -> None:
         """
-        Build an updated status snapshot from the registry and broadcast to clients.
+        Build an updated status snapshot from the registry, enrich with safety,
+        and broadcast to clients.
         """
         if not self._active_connections:
             return
 
         snapshot: SystemStatusResponse = registry.get_system_status()
+        if safety_engine:
+            for dev in snapshot.devices:
+                dev.safety = safety_engine.evaluate_device(dev)
 
         # Update cached states
         for dev in snapshot.devices:
@@ -110,6 +123,7 @@ class WebSocketManager:
     async def check_and_broadcast_stale(
         self,
         registry: DeviceRegistry,
+        safety_engine: Optional[Any] = None,
         now: Optional[datetime] = None,
     ) -> bool:
         """
@@ -121,6 +135,10 @@ class WebSocketManager:
             return False
 
         snapshot: SystemStatusResponse = registry.get_system_status(now=now)
+        if safety_engine:
+            for dev in snapshot.devices:
+                dev.safety = safety_engine.evaluate_device(dev)
+
         state_changed = False
 
         for dev in snapshot.devices:
@@ -136,24 +154,36 @@ class WebSocketManager:
 
         return False
 
-    def start_stale_monitor(self, registry: DeviceRegistry, interval: float = 2.0) -> None:
+    def start_stale_monitor(
+        self,
+        registry: DeviceRegistry,
+        safety_engine: Optional[Any] = None,
+        interval: float = 2.0,
+    ) -> None:
         """Start a background task to periodically detect stale transitions."""
         if self._is_monitoring:
             return
         self._is_monitoring = True
         try:
             loop = asyncio.get_running_loop()
-            self._monitor_task = loop.create_task(self._stale_monitor_loop(registry, interval))
+            self._monitor_task = loop.create_task(
+                self._stale_monitor_loop(registry, safety_engine, interval)
+            )
         except RuntimeError:
             # No running event loop yet (e.g. before uvicorn/fastapi starts)
             pass
 
-    async def _stale_monitor_loop(self, registry: DeviceRegistry, interval: float) -> None:
+    async def _stale_monitor_loop(
+        self,
+        registry: DeviceRegistry,
+        safety_engine: Optional[Any],
+        interval: float,
+    ) -> None:
         """Periodic background loop checking for stale transitions."""
         while self._is_monitoring:
             try:
                 await asyncio.sleep(interval)
-                await self.check_and_broadcast_stale(registry)
+                await self.check_and_broadcast_stale(registry, safety_engine=safety_engine)
             except asyncio.CancelledError:
                 break
             except Exception as e:

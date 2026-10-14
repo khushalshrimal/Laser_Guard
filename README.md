@@ -22,17 +22,19 @@ Laser_Guard/
 ├── backend/                      # Python + FastAPI Backend
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── main.py              # FastAPI entry point, CORS, /health, /ingest, /api/status, /ws/status
+│   │   ├── main.py              # FastAPI entry point, CORS, /health, /ingest, /api/status, /api/safety, /ws/status
 │   │   ├── registry.py          # In-memory device registry & stale-data detection
-│   │   ├── schemas.py           # Pydantic telemetry contract & WebSocket models
+│   │   ├── safety_engine.py     # Safety rules engine & fail-safe evaluation
+│   │   ├── schemas.py           # Pydantic telemetry contract, safety models, WebSocket envelopes
 │   │   └── websocket_manager.py # WebSocket client pool, initial snapshot, live broadcast
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_health.py       # Automated unit tests for /health & /
 │   │   ├── test_ingest.py       # Automated unit tests for POST /ingest validation
+│   │   ├── test_safety.py       # Automated unit tests for safety rules engine & severity precedence
 │   │   ├── test_status.py       # Automated unit tests for device status & stale detection
 │   │   └── test_websocket.py    # Automated unit tests for WebSocket live stream & stale broadcast
-│   ├── .env.example             # Example environment configuration (includes STALE_THRESHOLD_SECONDS)
+│   ├── .env.example             # Example configuration (STALE_THRESHOLD, HIGH_TEMP, ELEVATED_SMOKE)
 │   ├── requirements.txt         # Pinned backend dependencies
 │   └── .venv/                   # Python virtual environment (ignored by git)
 │
@@ -418,6 +420,88 @@ asyncio.run(listen())
 
 ---
 
+## Safety Rules Engine & Fail-Safe Evaluation (`GET /api/safety`)
+
+LaserGuard AI includes a decoupled backend safety rules engine (`backend/app/safety_engine.py`) that evaluates incoming telemetry and produces structured safety assessments.
+
+> [!WARNING]
+> **Safety & Demonstration Notice:** This software engine provides decision-support analysis for monitoring industrial laser cutters. It is **not** a certified hardware safety controller and does **not** actuate physical relays, optical isolators, or emergency-stop circuits. Never use live laser machinery, open active laser chambers, or generate actual smoke/fire to test this system.
+
+### Evaluated Safety Rules
+
+| Rule ID | Severity | Trigger Condition | Recommended Machine State | Description |
+|---|---|---|---|---|
+| `RULE_UNAUTHORIZED_RUNNING` | **CRITICAL** | `machine_running == True` while `machine_enabled == False` | `STOP_RECOMMENDED` | Laser head is actively cutting/firing while interlock authorization is disabled. |
+| `RULE_DOOR_OPEN_WHILE_RUNNING` | **CRITICAL** | `door_open == True` while `machine_running == True` | `STOP_RECOMMENDED` | Laser protective enclosure opened during active beam cutting. |
+| `RULE_FIRE_DETECTED` | **CRITICAL** | `flame_detected == True` | `STOP_RECOMMENDED` | Optical flame sensor detects active combustion or flame flicker. |
+| `RULE_HIGH_TEMPERATURE` | **WARNING** | `temperature_c >= HIGH_TEMP_THRESHOLD_C` (default 60°C) | `INVESTIGATION_RECOMMENDED` | Elevated chamber/nozzle temperature (demo setting). |
+| `RULE_ELEVATED_SMOKE` | **WARNING** | `smoke_level >= ELEVATED_SMOKE_THRESHOLD` (default 50.0) | `INVESTIGATION_RECOMMENDED` | Elevated particulate/obscuration index (demo setting). |
+| `RULE_STALE_TELEMETRY` | **WARNING** | `connectivity_state == STALE` | `STOP_RECOMMENDED` | Telemetry packets stopped arriving. Fail-safe dictates old data cannot prove safety. |
+| `RULE_MISSING_READINGS` | **UNKNOWN** | Any core safety reading is `None` / omitted | `STOP_RECOMMENDED` | Incomplete telemetry; fail-safe defaults to stop recommendation. |
+| `NORMAL` | **NORMAL** | All sensors nominal, fresh, and complete | `NORMAL_OPERATION` | Clear operating state. |
+
+### Severity Precedence
+$$\text{CRITICAL} > \text{WARNING} > \text{UNKNOWN} > \text{NORMAL}$$
+If multiple hazards occur concurrently, all violations are reported in `violations`, and the overall severity takes the highest precedence severity.
+
+### Threshold Configuration
+Set custom thresholds in `.env`:
+```env
+HIGH_TEMP_THRESHOLD_C=60.0
+ELEVATED_SMOKE_THRESHOLD=50.0
+STALE_THRESHOLD_SECONDS=10.0
+```
+
+### Example `GET /api/safety` Response (`200 OK`)
+```json
+{
+  "status": "ok",
+  "evaluated_at": "2026-10-14T11:20:00.123456Z",
+  "device_count": 1,
+  "overall_system_severity": "CRITICAL",
+  "assessments": [
+    {
+      "device_id": "esp32-cutter-01",
+      "source": "HARDWARE",
+      "overall_severity": "CRITICAL",
+      "recommended_state": "STOP_RECOMMENDED",
+      "violations": [
+        {
+          "rule_id": "RULE_DOOR_OPEN_WHILE_RUNNING",
+          "severity": "CRITICAL",
+          "message": "Enclosure safety door opened while laser cutter is actively running.",
+          "details": {
+            "door_open": true,
+            "machine_running": true
+          }
+        }
+      ],
+      "stale": false,
+      "evaluated_at": "2026-10-14T11:20:00.123456Z",
+      "disclaimer": "Software decision-support assessment only. Not a certified hardware safety controller. No physical e-stop actuation performed."
+    }
+  ],
+  "thresholds": {
+    "high_temperature_c": 60.0,
+    "elevated_smoke": 50.0,
+    "stale_threshold_seconds": 10.0
+  },
+  "disclaimer": "Software decision-support assessment only. Not a certified hardware safety controller. No physical e-stop actuation performed."
+}
+```
+
+### PowerShell Query Commands
+```powershell
+# Query safety assessment for all registered devices
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/safety" -Method Get
+
+# Query safety assessment for a specific device
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/safety?device_id=esp32-cutter-01" -Method Get
+```
+
+---
+
 ## License & Team
 LaserGuard AI is created for Hackathon SKIT014.
+
 

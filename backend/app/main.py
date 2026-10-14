@@ -1,6 +1,7 @@
 """
 LaserGuard AI - Smart Laser-Cutting Machine Safety & Monitoring System
-FastAPI Backend Entry Point, Telemetry Ingestion API, Device Health Registry, and WebSocket Live Updates
+FastAPI Backend Entry Point, Telemetry Ingestion API, Device Health Registry,
+Safety Rules Engine, and WebSocket Live Updates
 """
 
 from contextlib import asynccontextmanager
@@ -15,10 +16,13 @@ from app.schemas import (
     NormalizedTelemetryFrame,
     SensorReadings,
     SystemStatusResponse,
+    SystemSafetyResponse,
+    SafetyThresholdsConfig,
     normalize_to_utc_iso,
 )
 from app.registry import DeviceRegistry, get_device_registry
 from app.websocket_manager import WebSocketManager, get_ws_manager
+from app.safety_engine import SafetyEngine, get_safety_engine
 
 
 @asynccontextmanager
@@ -30,15 +34,16 @@ async def lifespan(app: FastAPI):
     """
     ws_mgr = get_ws_manager()
     reg = get_device_registry()
-    ws_mgr.start_stale_monitor(reg, interval=2.0)
+    safety_eng = get_safety_engine()
+    ws_mgr.start_stale_monitor(reg, safety_engine=safety_eng, interval=2.0)
     yield
     await ws_mgr.stop_stale_monitor()
 
 
 app = FastAPI(
     title="LaserGuard AI API",
-    description="Backend API, Telemetry Ingestion, Device Health Registry, and WebSocket Live Stream for LaserGuard AI",
-    version="0.4.0-websocket-telemetry",
+    description="Backend API, Telemetry Ingestion, Device Health Registry, Safety Rules Engine, and WebSocket Live Stream for LaserGuard AI",
+    version="0.5.0-safety-rules-engine",
     lifespan=lifespan,
 )
 
@@ -68,6 +73,7 @@ def read_root() -> Dict[str, Any]:
         "health_check": "/health",
         "ingest_endpoint": "/ingest",
         "status_endpoint": "/api/status",
+        "safety_endpoint": "/api/safety",
         "websocket_endpoint": "/ws/status",
         "status": "online",
     }
@@ -82,11 +88,11 @@ def get_health() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "app": "LaserGuard AI",
-        "version": "0.4.0-websocket-telemetry",
+        "version": "0.5.0-safety-rules-engine",
         "environment": "development",
         "hardware_connected": False,
         "active_source": "NONE",
-        "notice": "WebSocket live stream active at /ws/status. Telemetry ingestion online at POST /ingest and status tracking at GET /api/status. No physical hardware or e-stop actuation attached.",
+        "notice": "Safety rules engine active at GET /api/safety. WebSocket live stream at /ws/status, ingestion at POST /ingest, status at GET /api/status. Software decision-support only; no physical hardware or e-stop actuation attached.",
     }
 
 
@@ -101,6 +107,7 @@ async def ingest_telemetry(
     payload: TelemetryPayload,
     registry: DeviceRegistry = Depends(get_device_registry),
     ws_manager: WebSocketManager = Depends(get_ws_manager),
+    safety_engine: SafetyEngine = Depends(get_safety_engine),
 ) -> TelemetryIngestResponse:
     """
     Ingest a telemetry frame from either physical HARDWARE (ESP32) or SIMULATOR.
@@ -109,11 +116,10 @@ async def ingest_telemetry(
     - Rejects uncalibrated extra fields, invalid types, and out-of-range sensor values (HTTP 422).
     - Normalizes timestamps to standard ISO 8601 UTC representation.
     - Updates in-memory device registry with latest valid frame and server receive timestamp.
-    - Publishes updated status snapshot to all connected WebSocket clients (/ws/status).
+    - Evaluates safety rules and publishes updated snapshot to WebSocket clients (/ws/status).
     - Returns ingestion acknowledgement along with normalized data frame.
 
-    Safety Notice: Persistence and automated interlock decisions will be attached
-    in subsequent milestones.
+    Safety Notice: Persistence and physical actuator control are future milestones.
     """
     server_time = datetime.now(timezone.utc)
     ingested_at = normalize_to_utc_iso(server_time)
@@ -131,8 +137,12 @@ async def ingest_telemetry(
     # 1. Update in-memory device registry with latest valid frame
     registry.register_telemetry(normalized_frame, server_received_at=server_time)
 
-    # 2. Asynchronously broadcast status update to connected WebSocket clients
-    await ws_manager.broadcast_status(registry, event="telemetry_update")
+    # 2. Asynchronously broadcast status update enriched with safety evaluation to WebSocket clients
+    await ws_manager.broadcast_status(
+        registry,
+        safety_engine=safety_engine,
+        event="telemetry_update",
+    )
 
     return TelemetryIngestResponse(
         status="accepted",
@@ -146,23 +156,82 @@ async def ingest_telemetry(
     "/api/status",
     response_model=SystemStatusResponse,
     tags=["Status"],
-    summary="Get current registered devices and connectivity health",
+    summary="Get current registered devices, connectivity health, and safety state",
 )
 def get_status(
     device_id: Optional[str] = None,
     stale_threshold: Optional[float] = None,
     registry: DeviceRegistry = Depends(get_device_registry),
+    safety_engine: SafetyEngine = Depends(get_safety_engine),
 ) -> SystemStatusResponse:
     """
-    Retrieve registered devices, latest telemetry readings, and connectivity state.
+    Retrieve registered devices, latest telemetry readings, connectivity state,
+    and attached safety assessment.
 
     - Calculates ONLINE vs STALE state based on server receive timestamp.
-    - Devices that have never sent data are not falsely reported as online.
-    - Registry resets when the server process restarts (in-memory).
+    - Evaluates real-time safety rules for each registered device.
     - Notice: Software connectivity state does NOT guarantee physical sensor health or laser isolation.
     """
-    return registry.get_system_status(
+    system_status = registry.get_system_status(
         threshold=stale_threshold,
+        filter_device_id=device_id,
+    )
+    for dev in system_status.devices:
+        dev.safety = safety_engine.evaluate_device(dev)
+    return system_status
+
+
+@app.get(
+    "/api/safety",
+    response_model=SystemSafetyResponse,
+    tags=["Safety"],
+    summary="Get real-time safety rules assessment and fail-safe evaluation",
+)
+def get_safety(
+    device_id: Optional[str] = None,
+    high_temp_threshold: Optional[float] = None,
+    smoke_threshold: Optional[float] = None,
+    stale_threshold: Optional[float] = None,
+    registry: DeviceRegistry = Depends(get_device_registry),
+    safety_engine: SafetyEngine = Depends(get_safety_engine),
+) -> SystemSafetyResponse:
+    """
+    Evaluate safety rules against latest telemetry for each device.
+
+    Evaluated Rules:
+    1. CRITICAL: Unauthorized running (machine_running == True and machine_enabled == False)
+    2. CRITICAL: Open safety door while running (door_open == True and machine_running == True)
+    3. CRITICAL: Fire detected (flame_detected == True)
+    4. WARNING: High temperature (temperature_c >= threshold, default 60°C demo setting)
+    5. WARNING: Elevated smoke (smoke_level >= threshold, default 50 demo setting)
+    6. WARNING: Stale telemetry (connectivity_state == STALE)
+    7. FAIL-SAFE: Missing required sensor readings -> STOP_RECOMMENDED / UNKNOWN
+    8. NORMAL: All sensors nominal, fresh, and complete -> NORMAL_OPERATION
+
+    Notice: Software decision-support only; does NOT trigger physical hardware relays.
+    """
+    thresholds = None
+    if (
+        high_temp_threshold is not None
+        or smoke_threshold is not None
+        or stale_threshold is not None
+    ):
+        base = safety_engine.thresholds
+        thresholds = SafetyThresholdsConfig(
+            high_temperature_c=high_temp_threshold
+            if high_temp_threshold is not None
+            else base.high_temperature_c,
+            elevated_smoke=smoke_threshold
+            if smoke_threshold is not None
+            else base.elevated_smoke,
+            stale_threshold_seconds=stale_threshold
+            if stale_threshold is not None
+            else base.stale_threshold_seconds,
+        )
+
+    return safety_engine.evaluate_system(
+        registry=registry,
+        thresholds=thresholds,
         filter_device_id=device_id,
     )
 
@@ -172,16 +241,17 @@ async def websocket_status_endpoint(
     websocket: WebSocket,
     registry: DeviceRegistry = Depends(get_device_registry),
     ws_manager: WebSocketManager = Depends(get_ws_manager),
+    safety_engine: SafetyEngine = Depends(get_safety_engine),
 ):
     """
-    WebSocket endpoint broadcasting real-time system and device status updates.
+    WebSocket endpoint broadcasting real-time system, device status, and safety updates.
 
-    - On Connect: Delivers immediate SystemStatusResponse snapshot (event='status_snapshot').
-    - On Telemetry Ingestion: Broadcasts updated system status (event='telemetry_update').
+    - On Connect: Delivers immediate SystemStatusResponse snapshot with safety evaluation (event='status_snapshot').
+    - On Telemetry Ingestion: Broadcasts updated system status with safety evaluation (event='telemetry_update').
     - On Stale Timeout: Broadcasts transition when a device goes offline (event='stale_transition').
     - Client Messages: Accepts 'ping' (replies with 'pong') and 'refresh' (sends fresh snapshot).
     """
-    await ws_manager.connect(websocket, registry)
+    await ws_manager.connect(websocket, registry, safety_engine=safety_engine)
     try:
         while True:
             client_msg = await websocket.receive_text()
@@ -189,6 +259,8 @@ async def websocket_status_endpoint(
                 await websocket.send_json({"event": "pong"})
             elif client_msg == "refresh":
                 snapshot = registry.get_system_status()
+                for dev in snapshot.devices:
+                    dev.safety = safety_engine.evaluate_device(dev)
                 await websocket.send_json(
                     {"event": "status_snapshot", "data": snapshot.model_dump()}
                 )

@@ -98,3 +98,21 @@ export async function fetchBlackboxEvents(options: EventQueryOptions = {}): Prom
   }
   return response.json();
 }
+
+export async function ingestTelemetryPayload(payload: Record<string, unknown>): Promise<{ status: string; message: string }> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/ingest`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Ingestion failed: HTTP ${response.status} - ${errorText}`);
+  }
+  return response.json();
+}
+

@@ -10,7 +10,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Callable
 from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,7 @@ class CameraService:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._detection_callbacks: List[Callable[[Optional[CameraDetectionResult]], None]] = []
 
     @staticmethod
     def _resolve_default_model_path() -> Optional[str]:
@@ -240,7 +241,38 @@ class CameraService:
         with self._lock:
             self._state = CameraLifecycleState.STOPPED
             self._actual_fps = 0.0
-            return self._get_status_unlocked()
+            status_resp = self._get_status_unlocked()
+
+        # Notify callbacks that camera has stopped / offline
+        self._notify_callbacks(None)
+        return status_resp
+
+    def add_detection_callback(self, callback: Callable[[Optional[CameraDetectionResult]], None]) -> None:
+        """Register a callback invoked whenever a frame is processed or camera stops."""
+        with self._lock:
+            if callback not in self._detection_callbacks:
+                self._detection_callbacks.append(callback)
+
+    def remove_detection_callback(self, callback: Callable[[Optional[CameraDetectionResult]], None]) -> None:
+        """Unregister a detection callback."""
+        with self._lock:
+            if callback in self._detection_callbacks:
+                self._detection_callbacks.remove(callback)
+
+    def clear_detection_callbacks(self) -> None:
+        """Clear all registered detection callbacks."""
+        with self._lock:
+            self._detection_callbacks.clear()
+
+    def _notify_callbacks(self, result: Optional[CameraDetectionResult]) -> None:
+        """Notify registered callbacks outside of internal locks."""
+        with self._lock:
+            callbacks = list(self._detection_callbacks)
+        for cb in callbacks:
+            try:
+                cb(result)
+            except Exception as exc:
+                logger.error(f"Error in camera detection callback: {exc}")
 
     def update_roi(self, roi: RoiConfig) -> CameraStatusResponse:
         """Update danger zone ROI coordinates at runtime."""
@@ -528,6 +560,8 @@ class CameraService:
                     with self._lock:
                         self._latest_detection = detection_result
                         self._actual_fps = actual_fps
+
+                    self._notify_callbacks(detection_result)
 
                 except Exception as exc:
                     logger.error(f"Frame processing exception: {exc}")

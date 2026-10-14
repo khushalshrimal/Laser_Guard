@@ -34,22 +34,37 @@ from app.camera_service import (
     RoiConfig,
     get_camera_service,
 )
+from app.camera_safety_bridge import (
+    CameraSafetyBridge,
+    get_camera_safety_bridge,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application lifecycle management:
-    Initializes database schema and starts background stale detection monitoring on startup;
-    gracefully terminates tasks and releases camera resources on shutdown.
+    Initializes database schema, starts background stale detection monitoring,
+    attaches camera safety event bridge, and gracefully terminates on shutdown.
     """
+    import asyncio
     ws_mgr = get_ws_manager()
     reg = get_device_registry()
     safety_eng = get_safety_engine()
     event_store = get_event_store()
+    camera_svc = get_camera_service()
+    bridge = get_camera_safety_bridge()
 
     # Ensure SQLite database schema and indexes are initialized
     event_store.init_db()
+
+    # Wire camera safety bridge to camera service and active event loop
+    try:
+        loop = asyncio.get_running_loop()
+        bridge.set_event_loop(loop)
+    except RuntimeError:
+        pass
+    bridge.attach_to_camera_service(camera_svc)
 
     # Start background stale monitoring loop with safety and event store integration
     ws_mgr.start_stale_monitor(
@@ -60,7 +75,8 @@ async def lifespan(app: FastAPI):
     )
     yield
     await ws_mgr.stop_stale_monitor()
-    get_camera_service().stop()
+    bridge.detach_from_camera_service(camera_svc)
+    camera_svc.stop()
 
 
 app = FastAPI(
@@ -352,11 +368,20 @@ def get_camera_status(
 def start_camera(
     req: Optional[CameraStartRequest] = None,
     camera_service: CameraService = Depends(get_camera_service),
+    bridge: CameraSafetyBridge = Depends(get_camera_safety_bridge),
 ) -> CameraStatusResponse:
     """
-    Start the background camera worker thread.
+    Start the background camera worker thread and attach safety bridge.
     Optionally configure device_index, target_fps, or danger zone ROI.
     """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        bridge.set_event_loop(loop)
+    except RuntimeError:
+        pass
+    bridge.attach_to_camera_service(camera_service)
+
     device_index = req.device_index if req else None
     target_fps = req.target_fps if req else None
     roi = req.roi if req else None

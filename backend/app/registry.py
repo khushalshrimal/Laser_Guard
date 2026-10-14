@@ -59,6 +59,7 @@ class DeviceRegistry:
         self._canonical_device_id = canonical_device_id
         self._machine: Optional[DeviceRecord] = None
         self._stale_threshold_seconds = stale_threshold_seconds
+        self._camera_intrusion_detected: Optional[bool] = None
 
     @property
     def canonical_device_id(self) -> str:
@@ -74,6 +75,25 @@ class DeviceRegistry:
         with self._lock:
             self._stale_threshold_seconds = threshold
 
+    def update_camera_intrusion(self, detected: Optional[bool]) -> None:
+        """
+        Update camera intrusion status on the canonical machine's latest readings
+        without overwriting other sensor telemetry.
+        """
+        with self._lock:
+            self._camera_intrusion_detected = detected
+            if self._machine:
+                current_readings = self._machine.latest_frame.readings.model_dump()
+                current_readings["camera_intrusion_detected"] = detected
+                from app.schemas import SensorReadings
+                new_readings = SensorReadings(**current_readings)
+                self._machine.latest_frame = NormalizedTelemetryFrame(
+                    source=self._machine.latest_frame.source,
+                    device_id=self._canonical_device_id,
+                    timestamp=self._machine.latest_frame.timestamp,
+                    readings=new_readings,
+                )
+
     def register_telemetry(
         self,
         frame: NormalizedTelemetryFrame,
@@ -83,6 +103,7 @@ class DeviceRegistry:
         Record newly validated telemetry for the single authoritative machine.
         Uses the server receive time to track connectivity independently of client clocks.
         Always updates the single authoritative machine state.
+        Preserves live camera intrusion state if incoming frame does not specify it.
         """
         if server_received_at is None:
             server_received_at = datetime.now(timezone.utc)
@@ -92,6 +113,22 @@ class DeviceRegistry:
             server_received_at = server_received_at.astimezone(timezone.utc)
 
         with self._lock:
+            if (
+                frame.readings.camera_intrusion_detected is None
+                and self._camera_intrusion_detected is not None
+            ):
+                from app.schemas import SensorReadings
+                updated_readings = frame.readings.model_dump()
+                updated_readings["camera_intrusion_detected"] = self._camera_intrusion_detected
+                frame = NormalizedTelemetryFrame(
+                    source=frame.source,
+                    device_id=self._canonical_device_id,
+                    timestamp=frame.timestamp,
+                    readings=SensorReadings(**updated_readings),
+                )
+            elif frame.readings.camera_intrusion_detected is not None:
+                self._camera_intrusion_detected = frame.readings.camera_intrusion_detected
+
             record = DeviceRecord(
                 device_id=self._canonical_device_id,
                 source=frame.source,
@@ -207,6 +244,7 @@ class DeviceRegistry:
         """Clear the single registered machine (in-memory reset)."""
         with self._lock:
             self._machine = None
+            self._camera_intrusion_detected = None
 
 
 # Global singleton registry instance used by the FastAPI app

@@ -34,6 +34,7 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+*.tsbuildinfo
 .vite/
 
 # Environment Variables & Secrets (Keep .env.example tracked)

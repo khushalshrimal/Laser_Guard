@@ -44,20 +44,28 @@ Laser_Guard/
 │
 ├── frontend/                     # React + TypeScript + Vite Frontend
 │   ├── src/
-│   │   ├── App.tsx              # Industrial dark dashboard foundation
-│   │   ├── main.tsx             # React entry point
-│   │   ├── index.css            # Tailwind CSS directives
-│   │   └── vite-env.d.ts        # Vite environment type declarations
-│   ├── .env.example             # Frontend environment variables
-│   ├── index.html               # Industrial dark HTML shell
-│   ├── package.json             # Frontend dependencies & build scripts
-│   ├── postcss.config.js        # PostCSS configuration
-│   ├── tailwind.config.js       # Industrial color palette & typography
-│   ├── tsconfig.json            # TypeScript configuration
-│   └── tsconfig.node.json       # Vite TypeScript configuration
+│   │   ├── hooks/
+│   │   │   └── useLaserGuardLive.ts # WebSocket lifecycle, reconnect backoff & REST fallback hook
+│   │   ├── services/
+│   │   │   └── api.ts               # Central REST & WebSocket client
+│   │   ├── types/
+│   │   │   └── telemetry.ts         # TypeScript interfaces aligned with backend Pydantic models
+│   │   ├── utils/
+│   │   │   └── telemetry.test.ts    # Frontend automated unit tests
+│   │   ├── App.tsx                  # Industrial dark dashboard with live telemetry & blackbox audit table
+│   │   ├── main.tsx                 # React entry point
+│   │   ├── index.css                # Tailwind CSS directives
+│   │   └── vite-env.d.ts            # Vite environment type declarations
+│   ├── .env.example                 # Frontend environment variables (VITE_API_BASE_URL, VITE_WS_URL)
+│   ├── index.html                   # Industrial dark HTML shell
+│   ├── package.json                 # Frontend dependencies, build & test scripts
+│   ├── postcss.config.js            # PostCSS configuration
+│   ├── tailwind.config.js           # Industrial color palette & typography
+│   ├── tsconfig.json                # TypeScript configuration
+│   └── tsconfig.node.json           # Vite TypeScript configuration
 │
 ├── .gitignore                   # Multi-language ignore rules
-└── README.md                    # Setup and run instructions
+└── README.md                    # Setup, architecture, and run instructions
 ```
 
 ---
@@ -592,8 +600,39 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/events?limit=10&before_id=45" 
 
 ---
 
+## Live Dashboard & WebSocket Client Integration (Milestone 7)
+
+The React + TypeScript + Vite frontend connects to the FastAPI backend using a hybrid architecture:
+
+1. **Initial REST Synchronization**:
+   - `GET /api/status`: Loads the registered device inventory, connectivity states, and latest sensor readings on mount.
+   - `GET /api/events`: Loads the persistent SQLite blackbox event history with newest-first ordering.
+   - `GET /health`: Diagnoses backend server reachability and API identity.
+
+2. **Live WebSocket Stream (`/ws/status`)**:
+   - Central React hook [`useLaserGuardLive`](file:///c:/Users/khush/OneDrive/Desktop/Laser_Guard/frontend/src/hooks/useLaserGuardLive.ts) establishes a persistent WebSocket connection to `/ws/status`.
+   - Real-time updates without full-page reload on backend events:
+     - `status_snapshot`: Full state on connect.
+     - `telemetry_update`: Real-time sensor changes ingested via `POST /ingest`.
+     - `stale_transition`: Automatic heartbeat timeout alert (>10s).
+     - `safety_alert`: High-priority safety violations.
+   - Bounded exponential backoff reconnection (1s to 10s delay with 1.5 multiplier).
+   - Graceful cleanup on component unmount and StrictMode double-connection prevention.
+
+3. **Industrial Dark UI Capabilities**:
+   - **Live Connection Pill**: Reflects WebSocket state (`LIVE`, `RECONNECTING`, `DISCONNECTED`).
+   - **System Safety Banner**: Displays worst-case severity across all machines (`CRITICAL`, `WARNING`, `NORMAL`).
+   - **Physical State vs Software Recommendation**: Clearly distinguishes reported machine state (`RUNNING`, `IDLE`) from software decision-support recommendations (`STOP_RECOMMENDED`, `NORMAL_OPERATION`).
+   - **Source Labels**: Clearly highlights `HARDWARE` (ESP32) vs `SIMULATOR` (Synthetic physics generator with advisory banner).
+   - **Connectivity & Stale Warnings**: Prominent amber warnings when a device transitions to `STALE` (>10s timeout).
+   - **Persistent Event Audit Table**: Live table rendering SQLite blackbox history with severity filters (`ALL`, `CRITICAL`, `WARNING`, `NORMAL`).
+   - **Empty State**: Friendly industrial instructions when no devices are registered yet, with example PowerShell ingest snippets.
+
+---
+
 ## License & Team
 LaserGuard AI is created for Hackathon SKIT014.
+
 
 
 

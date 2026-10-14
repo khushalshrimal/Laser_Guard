@@ -27,6 +27,13 @@ from app.registry import DeviceRegistry, get_device_registry
 from app.websocket_manager import WebSocketManager, get_ws_manager
 from app.safety_engine import SafetyEngine, get_safety_engine
 from app.event_store import EventStore, get_event_store
+from app.camera_service import (
+    CameraService,
+    CameraStatusResponse,
+    CameraStartRequest,
+    RoiConfig,
+    get_camera_service,
+)
 
 
 @asynccontextmanager
@@ -34,7 +41,7 @@ async def lifespan(app: FastAPI):
     """
     Application lifecycle management:
     Initializes database schema and starts background stale detection monitoring on startup;
-    gracefully terminates tasks on shutdown.
+    gracefully terminates tasks and releases camera resources on shutdown.
     """
     ws_mgr = get_ws_manager()
     reg = get_device_registry()
@@ -53,12 +60,13 @@ async def lifespan(app: FastAPI):
     )
     yield
     await ws_mgr.stop_stale_monitor()
+    get_camera_service().stop()
 
 
 app = FastAPI(
     title="LaserGuard AI API",
-    description="Backend API, Telemetry Ingestion, Device Health Registry, Safety Rules Engine, Blackbox Event Store, and WebSocket Live Stream for LaserGuard AI",
-    version="0.6.0-blackbox-event-store",
+    description="Backend API, Telemetry Ingestion, Device Health Registry, Safety Rules Engine, Blackbox Event Store, Camera Hand Detection, and WebSocket Live Stream for LaserGuard AI",
+    version="0.7.0-camera-vision",
     lifespan=lifespan,
 )
 
@@ -90,6 +98,9 @@ def read_root() -> Dict[str, Any]:
         "status_endpoint": "/api/status",
         "safety_endpoint": "/api/safety",
         "events_endpoint": "/api/events",
+        "camera_status_endpoint": "/api/camera/status",
+        "camera_start_endpoint": "/api/camera/start",
+        "camera_stop_endpoint": "/api/camera/stop",
         "websocket_endpoint": "/ws/status",
         "status": "online",
     }
@@ -314,6 +325,57 @@ def get_events(
         limit=limit,
         before_id=before_id,
     )
+
+
+@app.get(
+    "/api/camera/status",
+    response_model=CameraStatusResponse,
+    tags=["Camera Vision"],
+    summary="Get current camera service and hand detection status",
+)
+def get_camera_status(
+    camera_service: CameraService = Depends(get_camera_service),
+) -> CameraStatusResponse:
+    """
+    Retrieve real-time camera state, FPS, danger zone configuration,
+    and latest detected hand landmarks.
+    """
+    return camera_service.get_status()
+
+
+@app.post(
+    "/api/camera/start",
+    response_model=CameraStatusResponse,
+    tags=["Camera Vision"],
+    summary="Start background camera capture and hand detection service",
+)
+def start_camera(
+    req: Optional[CameraStartRequest] = None,
+    camera_service: CameraService = Depends(get_camera_service),
+) -> CameraStatusResponse:
+    """
+    Start the background camera worker thread.
+    Optionally configure device_index, target_fps, or danger zone ROI.
+    """
+    device_index = req.device_index if req else None
+    target_fps = req.target_fps if req else None
+    roi = req.roi if req else None
+    return camera_service.start(device_index=device_index, target_fps=target_fps, roi=roi)
+
+
+@app.post(
+    "/api/camera/stop",
+    response_model=CameraStatusResponse,
+    tags=["Camera Vision"],
+    summary="Stop background camera capture and release resources",
+)
+def stop_camera(
+    camera_service: CameraService = Depends(get_camera_service),
+) -> CameraStatusResponse:
+    """
+    Gracefully stop the camera worker thread and release hardware capture devices.
+    """
+    return camera_service.stop()
 
 
 @app.websocket("/ws/status")

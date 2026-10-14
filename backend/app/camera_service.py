@@ -159,6 +159,7 @@ class CameraService:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._detection_callbacks: List[Callable[[Optional[CameraDetectionResult]], None]] = []
+        self._latest_frame_jpeg: Optional[bytes] = None
 
     @staticmethod
     def _resolve_default_model_path() -> Optional[str]:
@@ -241,11 +242,41 @@ class CameraService:
         with self._lock:
             self._state = CameraLifecycleState.STOPPED
             self._actual_fps = 0.0
+            self._latest_frame_jpeg = None
             status_resp = self._get_status_unlocked()
 
         # Notify callbacks that camera has stopped / offline
         self._notify_callbacks(None)
         return status_resp
+
+    @property
+    def is_running(self) -> bool:
+        """Return True if camera capture worker is actively running."""
+        with self._lock:
+            return self._state == CameraLifecycleState.RUNNING
+
+    def get_latest_frame_jpeg(self) -> Optional[bytes]:
+        """Thread-safe retrieval of the latest encoded JPEG frame bytes."""
+        with self._lock:
+            return self._latest_frame_jpeg
+
+    def stream_frames(self):
+        """
+        Generator yielding MJPEG multipart frames for streaming HTTP responses.
+        Exits gracefully when camera stops or stop event is set.
+        """
+        while not self._stop_event.is_set():
+            with self._lock:
+                if self._state != CameraLifecycleState.RUNNING:
+                    break
+                frame_bytes = self._latest_frame_jpeg
+
+            if frame_bytes:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+                )
+            time.sleep(0.06)  # ~16 FPS max stream rate
 
     def add_detection_callback(self, callback: Callable[[Optional[CameraDetectionResult]], None]) -> None:
         """Register a callback invoked whenever a frame is processed or camera stops."""
@@ -557,9 +588,45 @@ class CameraService:
                         if dt > 0:
                             actual_fps = (len(frame_times) - 1) / dt
 
+                    # Generate annotated display frame for MJPEG live stream
+                    display_frame = frame.copy()
+                    h, w = display_frame.shape[:2]
+
+                    # 1. Draw danger zone ROI boundary
+                    rx1 = int(current_roi.x_min * w)
+                    ry1 = int(current_roi.y_min * h)
+                    rx2 = int(current_roi.x_max * w)
+                    ry2 = int(current_roi.y_max * h)
+
+                    roi_color = (0, 0, 240) if detection_result.danger_zone_breached else (240, 200, 0)
+                    cv2.rectangle(display_frame, (rx1, ry1), (rx2, ry2), roi_color, 2)
+                    roi_label = "DANGER ZONE: BREACHED" if detection_result.danger_zone_breached else "EXCLUSION ZONE: CLEAR"
+                    cv2.putText(display_frame, roi_label, (rx1 + 6, max(20, ry1 + 22)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, roi_color, 2)
+
+                    # 2. Draw detected hand bounding boxes and landmarks
+                    for hand in detection_result.hands:
+                        hx1 = int(hand.bbox.x_min * w)
+                        hy1 = int(hand.bbox.y_min * h)
+                        hx2 = int(hand.bbox.x_max * w)
+                        hy2 = int(hand.bbox.y_max * h)
+                        hand_color = (0, 0, 255) if hand.in_danger_zone else (0, 255, 0)
+                        cv2.rectangle(display_frame, (hx1, hy1), (hx2, hy2), hand_color, 2)
+
+                        hand_tag = f"{hand.label or 'Hand'} {int((hand.score or 0.0) * 100)}%"
+                        cv2.putText(display_frame, hand_tag, (hx1, max(15, hy1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, hand_color, 1)
+
+                        for lm in hand.landmarks:
+                            lx = int(lm.x * w)
+                            ly = int(lm.y * h)
+                            cv2.circle(display_frame, (lx, ly), 3, (0, 255, 255), -1)
+
+                    ret_enc, jpeg = cv2.imencode('.jpg', display_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                    jpeg_bytes = jpeg.tobytes() if ret_enc else None
+
                     with self._lock:
                         self._latest_detection = detection_result
                         self._actual_fps = actual_fps
+                        self._latest_frame_jpeg = jpeg_bytes
 
                     self._notify_callbacks(detection_result)
 

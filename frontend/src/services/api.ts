@@ -116,3 +116,52 @@ export async function ingestTelemetryPayload(payload: Record<string, unknown>): 
   return response.json();
 }
 
+export function getCameraStreamUrl(): string {
+  return `${getApiBaseUrl()}/api/camera/stream`;
+}
+
+export async function fetchCameraStatus(): Promise<import('../types/telemetry').CameraStatusResponse> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/camera/status`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch camera status: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function startCamera(payload?: {
+  device_index?: number;
+  target_fps?: number;
+  roi?: import('../types/telemetry').RoiConfig;
+}): Promise<import('../types/telemetry').CameraStatusResponse> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/camera/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to start camera: HTTP ${response.status} - ${errText}`);
+  }
+  return response.json();
+}
+
+export async function stopCamera(): Promise<import('../types/telemetry').CameraStatusResponse> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/camera/stop`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to stop camera: HTTP ${response.status} - ${errText}`);
+  }
+  return response.json();
+}
+

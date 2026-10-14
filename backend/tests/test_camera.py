@@ -271,6 +271,14 @@ class TestCameraApiEndpoints(unittest.TestCase):
         self.assertEqual(data["camera_status_endpoint"], "/api/camera/status")
         self.assertIn("camera_start_endpoint", data)
         self.assertIn("camera_stop_endpoint", data)
+        self.assertIn("camera_stream_endpoint", data)
+        self.assertEqual(data["camera_stream_endpoint"], "/api/camera/stream")
+
+    def test_camera_stream_stopped_returns_503(self):
+        # Camera is stopped
+        response = self.client.get("/api/camera/stream")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Camera service is not currently running", response.json()["detail"])
 
 
 if __name__ == "__main__":

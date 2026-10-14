@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, Depends, status, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import (
@@ -117,6 +118,7 @@ def read_root() -> Dict[str, Any]:
         "camera_status_endpoint": "/api/camera/status",
         "camera_start_endpoint": "/api/camera/start",
         "camera_stop_endpoint": "/api/camera/stop",
+        "camera_stream_endpoint": "/api/camera/stream",
         "websocket_endpoint": "/ws/status",
         "status": "online",
     }
@@ -401,6 +403,29 @@ def stop_camera(
     Gracefully stop the camera worker thread and release hardware capture devices.
     """
     return camera_service.stop()
+
+
+@app.get(
+    "/api/camera/stream",
+    tags=["Camera Vision"],
+    summary="Live MJPEG video stream with danger zone overlay",
+)
+def get_camera_stream(
+    camera_service: CameraService = Depends(get_camera_service),
+):
+    """
+    Streams live camera frames as multipart/x-mixed-replace MJPEG.
+    If camera is not running, returns HTTP 503 Service Unavailable.
+    """
+    if not camera_service.is_running:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Camera service is not currently running. Start the camera first.",
+        )
+    return StreamingResponse(
+        camera_service.stream_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.websocket("/ws/status")

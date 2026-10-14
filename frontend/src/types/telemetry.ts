@@ -126,3 +126,52 @@ export interface BackendHealth {
   active_source: string;
   notice: string;
 }
+
+export type CameraLifecycleState = 'STOPPED' | 'STARTING' | 'RUNNING' | 'ERROR';
+
+export interface RoiConfig {
+  x_min: number;
+  y_min: number;
+  x_max: number;
+  y_max: number;
+}
+
+export interface HandLandmark {
+  x: number;
+  y: number;
+  z?: number | null;
+}
+
+export interface HandBBox {
+  x_min: number;
+  y_min: number;
+  x_max: number;
+  y_max: number;
+}
+
+export interface HandDetection {
+  label?: string | null;
+  score?: number | null;
+  landmarks?: HandLandmark[];
+  bbox: HandBBox;
+  in_danger_zone: boolean;
+}
+
+export interface CameraDetectionResult {
+  status: string;
+  hand_count: number;
+  hands: HandDetection[];
+  danger_zone_breached: boolean;
+  timestamp: string;
+}
+
+export interface CameraStatusResponse {
+  state: CameraLifecycleState;
+  device_index: number;
+  target_fps: number;
+  actual_fps: number;
+  roi: RoiConfig;
+  error_message?: string | null;
+  latest_detection?: CameraDetectionResult | null;
+  available: boolean;
+}

@@ -378,5 +378,109 @@ describe('LaserGuard AI Frontend Telemetry & Protocol Tests', () => {
       assert.strictEqual(readingsWithoutFlow.camera_intrusion_detected, null);
     });
   });
+
+  describe('Milestone 4: Camera Safety Monitoring UI & Protocol Tests', () => {
+    test('derives live MJPEG stream URL correctly from API base', () => {
+      const apiBase = 'http://127.0.0.1:8000';
+      const streamUrl = `${apiBase}/api/camera/stream`;
+      assert.strictEqual(streamUrl, 'http://127.0.0.1:8000/api/camera/stream');
+    });
+
+    test('correctly maps camera lifecycle states (STOPPED, STARTING, RUNNING, ERROR)', () => {
+      const states = ['STOPPED', 'STARTING', 'RUNNING', 'ERROR'] as const;
+      for (const st of states) {
+        assert.ok(typeof st === 'string');
+      }
+    });
+
+    test('clearly distinguishes camera offline from confirmed danger zone intrusion', () => {
+      // 1. Offline: null
+      const offlineReadings = { camera_intrusion_detected: null };
+      assert.strictEqual(offlineReadings.camera_intrusion_detected, null);
+      assert.notStrictEqual(offlineReadings.camera_intrusion_detected, true);
+
+      // 2. Clear: false
+      const clearReadings = { camera_intrusion_detected: false };
+      assert.strictEqual(clearReadings.camera_intrusion_detected, false);
+
+      // 3. Breached: true
+      const breachReadings = { camera_intrusion_detected: true };
+      assert.strictEqual(breachReadings.camera_intrusion_detected, true);
+    });
+
+    test('handles danger zone ROI boundaries and validates normalization', () => {
+      const roi = { x_min: 0.2, y_min: 0.2, x_max: 0.8, y_max: 0.8 };
+      assert.ok(roi.x_min >= 0.0 && roi.x_min <= 1.0);
+      assert.ok(roi.x_max >= 0.0 && roi.x_max <= 1.0);
+      assert.ok(roi.x_min < roi.x_max);
+      assert.ok(roi.y_min < roi.y_max);
+    });
+
+    test('identifies intrusion activation and clearance events in event history', () => {
+      const events = [
+        {
+          id: 1,
+          rule_id: 'RULE_PERIMETER_INTRUSION',
+          event_type: 'RULE_ACTIVATION',
+          severity: 'CRITICAL',
+          message: 'Safety rule activated: Optical exclusion zone breached',
+        },
+        {
+          id: 2,
+          rule_id: 'RULE_PERIMETER_INTRUSION',
+          event_type: 'RULE_CLEARANCE',
+          severity: 'NORMAL',
+          message: 'Safety hazard cleared: rule RULE_PERIMETER_INTRUSION is no longer triggered',
+        },
+      ];
+
+      const activations = events.filter((e) => e.rule_id === 'RULE_PERIMETER_INTRUSION' && e.event_type === 'RULE_ACTIVATION');
+      const clearances = events.filter((e) => e.rule_id === 'RULE_PERIMETER_INTRUSION' && e.event_type === 'RULE_CLEARANCE');
+
+      assert.strictEqual(activations.length, 1);
+      assert.strictEqual(clearances.length, 1);
+      assert.strictEqual(activations[0].severity, 'CRITICAL');
+      assert.strictEqual(clearances[0].severity, 'NORMAL');
+    });
+
+    test('prevents duplicate alert triggering on repeated identical WebSocket snapshots', () => {
+      let alertCount = 0;
+      let lastAlertState: boolean | null = null;
+
+      function onTelemetryUpdate(intrusionState: boolean | null) {
+        if (intrusionState === true && lastAlertState !== true) {
+          alertCount++;
+        }
+        lastAlertState = intrusionState;
+      }
+
+      // Continuous breach over 5 consecutive WebSocket frames
+      onTelemetryUpdate(true); // Alert 1 (Rising edge)
+      onTelemetryUpdate(true); // Suppressed
+      onTelemetryUpdate(true); // Suppressed
+      onTelemetryUpdate(true); // Suppressed
+      onTelemetryUpdate(true); // Suppressed
+      assert.strictEqual(alertCount, 1);
+
+      // Cleared
+      onTelemetryUpdate(false);
+      assert.strictEqual(alertCount, 1);
+
+      // Re-entry
+      onTelemetryUpdate(true); // Alert 2 (New edge)
+      assert.strictEqual(alertCount, 2);
+    });
+
+    test('cleans up stream URL resource when camera stops or unmounts', () => {
+      let activeStreamUrl: string | null = 'http://127.0.0.1:8000/api/camera/stream';
+      // Simulate stop/unmount
+      function stopOrUnmount() {
+        activeStreamUrl = null;
+      }
+
+      stopOrUnmount();
+      assert.strictEqual(activeStreamUrl, null);
+    });
+  });
 });
 

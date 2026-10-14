@@ -241,6 +241,48 @@ class TestTelemetryIngestionContract(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["data"]["timestamp"], "2026-10-14T10:00:00.000000Z")
 
+    # 8. Coolant Water Flow (YF-S201) and Camera Intrusion Contract Validation
+    def test_valid_water_flow_and_camera_intrusion(self):
+        payload = {
+            "source": "HARDWARE",
+            "device_id": "esp32-flow-cam",
+            "readings": {
+                "water_flow_lpm": 4.5,
+                "camera_intrusion_detected": False,
+            },
+        }
+        response = self.client.post("/ingest", json=payload)
+        self.assertEqual(response.status_code, 200)
+        readings = response.json()["data"]["readings"]
+        self.assertEqual(readings["water_flow_lpm"], 4.5)
+        self.assertEqual(readings["camera_intrusion_detected"], False)
+
+    def test_reject_negative_or_excessive_water_flow(self):
+        # Negative flow rate (< 0.0)
+        resp_neg = self.client.post("/ingest", json={
+            "source": "HARDWARE",
+            "device_id": "flow-neg",
+            "readings": {"water_flow_lpm": -1.0},
+        })
+        self.assertEqual(resp_neg.status_code, 422)
+
+        # Flow rate > 100.0 L/min
+        resp_high = self.client.post("/ingest", json={
+            "source": "HARDWARE",
+            "device_id": "flow-high",
+            "readings": {"water_flow_lpm": 150.0},
+        })
+        self.assertEqual(resp_high.status_code, 422)
+
+    def test_reject_non_boolean_camera_intrusion(self):
+        resp = self.client.post("/ingest", json={
+            "source": "SIMULATOR",
+            "device_id": "cam-str",
+            "readings": {"camera_intrusion_detected": "intruder_present"},
+        })
+        self.assertEqual(resp.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -345,4 +345,38 @@ describe('LaserGuard AI Frontend Telemetry & Protocol Tests', () => {
       assert.strictEqual(emptyEvents.length, 0);
     });
   });
+
+  describe('Milestone 8: Hardware Contract Preparedness (Water Flow & Camera)', () => {
+    test('correctly parses water_flow_lpm and camera_intrusion_detected in readings', () => {
+      const readings = {
+        door_open: false,
+        flame_detected: false,
+        smoke_level: 10.0,
+        temperature_c: 25.0,
+        machine_enabled: true,
+        machine_running: true,
+        water_flow_lpm: 4.8,
+        camera_intrusion_detected: false,
+      };
+
+      assert.strictEqual(readings.water_flow_lpm, 4.8);
+      assert.strictEqual(readings.camera_intrusion_detected, false);
+    });
+
+    test('preserves null/unreported state without fabricating 0.0 values', () => {
+      const readingsWithoutFlow = {
+        door_open: false,
+        flame_detected: false,
+        smoke_level: 10.0,
+        temperature_c: 25.0,
+        water_flow_lpm: null,
+        camera_intrusion_detected: null,
+      };
+
+      assert.strictEqual(readingsWithoutFlow.water_flow_lpm, null);
+      assert.notStrictEqual(readingsWithoutFlow.water_flow_lpm, 0.0);
+      assert.strictEqual(readingsWithoutFlow.camera_intrusion_detected, null);
+    });
+  });
 });
+

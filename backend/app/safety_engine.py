@@ -32,6 +32,8 @@ RULE_HIGH_TEMPERATURE = "RULE_HIGH_TEMPERATURE"
 RULE_ELEVATED_SMOKE = "RULE_ELEVATED_SMOKE"
 RULE_STALE_TELEMETRY = "RULE_STALE_TELEMETRY"
 RULE_MISSING_READINGS = "RULE_MISSING_READINGS"
+RULE_COOLANT_FLOW_LOW = "RULE_COOLANT_FLOW_LOW"
+RULE_PERIMETER_INTRUSION = "RULE_PERIMETER_INTRUSION"
 
 # Strict Severity Precedence Ordering
 SEVERITY_ORDER: Dict[SafetySeverity, int] = {
@@ -215,7 +217,44 @@ class SafetyEngine:
                 )
             )
 
-        # 7. FAIL-SAFE RECOMMENDATION: missing required readings / unknown status
+        # 7. CRITICAL — Coolant flow failure: water_flow_lpm < 1.0 L/min while machine_running == True
+        if (
+            readings.water_flow_lpm is not None
+            and readings.machine_running is True
+            and readings.water_flow_lpm < 1.0
+        ):
+            violations.append(
+                SafetyViolation(
+                    rule_id=RULE_COOLANT_FLOW_LOW,
+                    severity=SafetySeverity.CRITICAL,
+                    message=(
+                        f"Coolant water flow rate ({readings.water_flow_lpm} L/min) is below safe operating threshold "
+                        "(1.0 L/min) while laser is actively running. Laser tube thermal damage / fracture hazard."
+                    ),
+                    details={"water_flow_lpm": readings.water_flow_lpm, "min_flow_lpm": 1.0},
+                )
+            )
+
+        # 8. CRITICAL/WARNING — Optical perimeter intrusion: camera_intrusion_detected == True
+        if readings.camera_intrusion_detected is True:
+            is_running = readings.machine_running is True
+            violations.append(
+                SafetyViolation(
+                    rule_id=RULE_PERIMETER_INTRUSION,
+                    severity=SafetySeverity.CRITICAL if is_running else SafetySeverity.WARNING,
+                    message=(
+                        "Optical exclusion zone breached by operator hand/body while laser is cutting."
+                        if is_running
+                        else "Optical perimeter boundary breached while machine is idle."
+                    ),
+                    details={
+                        "camera_intrusion_detected": True,
+                        "machine_running": is_running,
+                    },
+                )
+            )
+
+        # 9. FAIL-SAFE RECOMMENDATION: missing required readings / unknown status
         missing_fields = [
             f for f in CORE_SAFETY_FIELDS if getattr(readings, f) is None
         ]

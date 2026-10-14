@@ -491,6 +491,48 @@ export const App: React.FC = () => {
                               : 'IDLE'}
                           </div>
                         </div>
+
+                        {/* Coolant Water Flow (YF-S201) */}
+                        <div className="p-2.5 rounded-lg bg-[#0c0e12] border border-slate-800/80">
+                          <div className="text-[10px] text-slate-400 font-mono">Coolant Flow (YF-S201)</div>
+                          <div
+                            className={`text-xs font-bold font-mono mt-1 ${
+                              device.latest_readings.water_flow_lpm !== null &&
+                              device.latest_readings.water_flow_lpm !== undefined &&
+                              device.latest_readings.water_flow_lpm < 1.0 &&
+                              device.latest_readings.machine_running
+                                ? 'text-rose-400 font-bold animate-pulse'
+                                : device.latest_readings.water_flow_lpm !== null &&
+                                  device.latest_readings.water_flow_lpm !== undefined
+                                ? 'text-cyan-300'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {device.latest_readings.water_flow_lpm !== null && device.latest_readings.water_flow_lpm !== undefined
+                              ? `${device.latest_readings.water_flow_lpm.toFixed(1)} L/min`
+                              : 'UNREPORTED'}
+                          </div>
+                        </div>
+
+                        {/* Optical Perimeter (Webcam) */}
+                        <div className="p-2.5 rounded-lg bg-[#0c0e12] border border-slate-800/80">
+                          <div className="text-[10px] text-slate-400 font-mono">Optical Boundary (Cam)</div>
+                          <div
+                            className={`text-xs font-bold font-mono mt-1 ${
+                              device.latest_readings.camera_intrusion_detected
+                                ? 'text-rose-400 font-bold animate-pulse'
+                                : device.latest_readings.camera_intrusion_detected === false
+                                ? 'text-emerald-400'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {device.latest_readings.camera_intrusion_detected === undefined || device.latest_readings.camera_intrusion_detected === null
+                              ? 'OFFLINE / UNREPORTED'
+                              : device.latest_readings.camera_intrusion_detected
+                              ? 'INTRUSION DETECTED'
+                              : 'PERIMETER CLEAR'}
+                          </div>
+                        </div>
                       </div>
                     </div>
 

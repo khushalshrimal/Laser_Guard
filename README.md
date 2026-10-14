@@ -36,11 +36,15 @@ Laser_Guard/
 │   │   ├── test_health.py       # Automated unit tests for /health & /
 │   │   ├── test_ingest.py       # Automated unit tests for POST /ingest validation
 │   │   ├── test_safety.py       # Automated unit tests for safety rules engine & severity precedence
+│   │   ├── test_simulator.py    # Automated unit tests for telemetry simulator scenarios
 │   │   ├── test_status.py       # Automated unit tests for device status & stale detection
 │   │   └── test_websocket.py    # Automated unit tests for WebSocket live stream & stale broadcast
 │   ├── .env.example             # Example configuration (STALE_THRESHOLD, DATABASE_PATH, MAX_EVENTS_RETAINED)
 │   ├── requirements.txt         # Pinned backend dependencies
 │   └── .venv/                   # Python virtual environment (ignored by git)
+│
+├── simulator/                   # Software-First Telemetry Simulator (NO MQTT, pure Python)
+│   └── simulate_telemetry.py    # Multi-scenario synthetic telemetry generator for POST /ingest
 │
 ├── frontend/                     # React + TypeScript + Vite Frontend
 │   ├── src/
@@ -630,8 +634,55 @@ The React + TypeScript + Vite frontend connects to the FastAPI backend using a h
 
 ---
 
+## Software-First Integration Preparation (Milestone 8)
+
+> **Workflow Rule**: Hardware will be physically connected and tested only in the final phase. Until then, all development, validation, and testing remain **100% software-first**.
+
+### Hardware-to-Software Sensor Contract Mapping
+Every planned physical input maps directly to an explicit field in `SensorReadings`:
+
+| Sensor Model | Target Telemetry Field | Units & Range | Calibration & Fault Handling |
+| :--- | :--- | :--- | :--- |
+| **IR Flame Sensor** | `flame_detected` | `StrictBool` (`True` / `False`) | Optical flame flicker detection. Connected to ESP32 digital GPIO. Active low/high inverted in firmware. Missing: `None`. |
+| **MQ-2 Gas / Smoke** | `smoke_level` | `float` ($\ge 0.0$) | Particulate concentration index. Raw ESP32 ADC (0–4095) or calibrated obscuration index. Warning threshold $\ge 50.0$. Missing: `None`. |
+| **DS18B20 Digital Probe** | `temperature_c` | `float` ($-40.0$ to $500.0$ °C) | 1-Wire bus protocol with CRC validation. Disconnected or bus fault evaluates to `None` (**never** fabricated as `0.0°C` or power-on `85°C`). Warning threshold $\ge 60.0°C$. |
+| **YF-S201 Flow Sensor** | `water_flow_lpm` | `float` ($0.0$ to $100.0$ L/min) | Hall-effect turbine pulse frequency calibration: $F = 7.5 \times Q \text{ (L/min)}$. Pulses counted via ESP32 hardware interrupt: $Q = \text{pulses} / (450 \times \Delta t)$. If laser running and $Q < 1.0$ L/min $\rightarrow$ `RULE_COOLANT_FLOW_LOW` (CRITICAL). Missing: `None`. |
+| **Laptop Webcam** | `camera_intrusion_detected` | `StrictBool` (`True` / `False`) | Optical perimeter monitoring via separate Python + OpenCV + MediaPipe service (**NO YOLO**, **NO MQTT**). Triggers `RULE_PERIMETER_INTRUSION` (CRITICAL if laser running, WARNING if idle). Missing/offline: `None`. |
+
+### Software Telemetry Simulator (`simulator/simulate_telemetry.py`)
+A standalone, software-only CLI script is included to test all safety conditions without physical hardware. Every packet is strictly tagged `source: "SIMULATOR"` and uses the existing HTTP `POST /ingest` endpoint (**NO MQTT**).
+
+#### Supported Scenario Modes:
+- `nominal`: Normal safe cutting (door closed, no flame, nominal temp, 4.5 L/min flow).
+- `door_trip`: Enclosure door opened while cutting (`RULE_DOOR_OPEN_WHILE_RUNNING` $\rightarrow$ CRITICAL).
+- `fire`: Flame sensor triggered (`RULE_FIRE_DETECTED` $\rightarrow$ CRITICAL).
+- `overheat`: Workpiece temp 74.5°C (`RULE_HIGH_TEMPERATURE` $\rightarrow$ WARNING).
+- `smoke`: Particulate level 68.0 (`RULE_ELEVATED_SMOKE` $\rightarrow$ WARNING).
+- `coolant_fail`: Water flow 0.2 L/min while cutting (`RULE_COOLANT_FLOW_LOW` $\rightarrow$ CRITICAL).
+- `camera_intrusion`: Operator hand detected in cutting zone (`RULE_PERIMETER_INTRUSION` $\rightarrow$ CRITICAL).
+- `idle`: Safe parked machine (beam off, 0 L/min flow nominal).
+- `unauthorized_running`: Laser firing while interlock disabled (`RULE_UNAUTHORIZED_RUNNING` $\rightarrow$ CRITICAL).
+
+#### Simulator Usage:
+```powershell
+# Send 1 nominal telemetry frame
+python simulator/simulate_telemetry.py --mode nominal
+
+# Send 1 fire hazard alert frame
+python simulator/simulate_telemetry.py --mode fire
+
+# Send 1 coolant water flow failure frame
+python simulator/simulate_telemetry.py --mode coolant_fail
+
+# Stream continuous telemetry every 2 seconds
+python simulator/simulate_telemetry.py --mode nominal --count 0 --interval 2.0
+```
+
+---
+
 ## License & Team
 LaserGuard AI is created for Hackathon SKIT014.
+
 
 
 

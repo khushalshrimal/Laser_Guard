@@ -65,6 +65,16 @@ class SensorReadings(BaseModel):
         default=None,
         description="Laser cutting operation state. True if the laser beam is actively cutting/firing, False if idle. Unit: Boolean."
     )
+    water_flow_lpm: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=100.0,
+        description="Coolant water flow rate through CO₂ tube/chiller. Unit: Liters per minute (L/min). Non-negative scale [0.0, 100.0]. Calibrated from YF-S201 Hall-effect pulse counting (Q = pulses / (450 * dt)). None if sensor disconnected/uninstalled."
+    )
+    camera_intrusion_detected: Optional[StrictBool] = Field(
+        default=None,
+        description="Optical boundary intrusion detected by future OpenCV + MediaPipe webcam service (no YOLO). True if human hand/operator breaches cutting exclusion zone, False if perimeter clear. Unit: Boolean. None if camera offline."
+    )
     radiation_level: Optional[float] = Field(
         default=None,
         ge=0.0,

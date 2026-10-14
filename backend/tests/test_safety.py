@@ -22,6 +22,8 @@ from app.safety_engine import (
     RULE_ELEVATED_SMOKE,
     RULE_STALE_TELEMETRY,
     RULE_MISSING_READINGS,
+    RULE_COOLANT_FLOW_LOW,
+    RULE_PERIMETER_INTRUSION,
 )
 from app.schemas import (
     SafetySeverity,
@@ -408,6 +410,58 @@ class TestSafetyRulesEngine(unittest.TestCase):
             self.assertEqual(dev["safety"]["overall_severity"], "CRITICAL")
             self.assertEqual(dev["safety"]["recommended_state"], "STOP_RECOMMENDED")
 
+    # 17. Coolant Water Flow Low Rule (YF-S201)
+    def test_coolant_flow_low_rule(self):
+        # Machine running with flow < 1.0 L/min -> CRITICAL
+        readings = self._create_nominal_readings()
+        readings.water_flow_lpm = 0.5  # Below 1.0 L/min
+        status = self._create_nominal_status("cutter-coolant")
+        status.latest_readings = readings
+
+        assessment = self.engine.evaluate_device(status)
+        self.assertEqual(assessment.overall_severity, SafetySeverity.CRITICAL)
+        self.assertEqual(assessment.recommended_state, RecommendedMachineState.STOP_RECOMMENDED)
+        rule_ids = [v.rule_id for v in assessment.violations]
+        self.assertIn(RULE_COOLANT_FLOW_LOW, rule_ids)
+
+        # Machine idle with flow = 0.0 -> Nominal (no flow needed when laser is idle)
+        readings_idle = self._create_nominal_readings()
+        readings_idle.machine_running = False
+        readings_idle.water_flow_lpm = 0.0
+        status_idle = self._create_nominal_status("cutter-idle")
+        status_idle.latest_readings = readings_idle
+
+        assessment_idle = self.engine.evaluate_device(status_idle)
+        rule_ids_idle = [v.rule_id for v in assessment_idle.violations]
+        self.assertNotIn(RULE_COOLANT_FLOW_LOW, rule_ids_idle)
+
+    # 18. Optical Perimeter Intrusion Rule (Camera)
+    def test_camera_intrusion_rule(self):
+        # Intrusion detected while running -> CRITICAL
+        readings = self._create_nominal_readings()
+        readings.camera_intrusion_detected = True
+        status = self._create_nominal_status("cutter-cam")
+        status.latest_readings = readings
+
+        assessment = self.engine.evaluate_device(status)
+        self.assertEqual(assessment.overall_severity, SafetySeverity.CRITICAL)
+        self.assertEqual(assessment.recommended_state, RecommendedMachineState.STOP_RECOMMENDED)
+        rule_ids = [v.rule_id for v in assessment.violations]
+        self.assertIn(RULE_PERIMETER_INTRUSION, rule_ids)
+
+        # Intrusion detected while machine is idle -> WARNING
+        readings_idle = self._create_nominal_readings()
+        readings_idle.machine_running = False
+        readings_idle.camera_intrusion_detected = True
+        status_idle = self._create_nominal_status("cutter-cam-idle")
+        status_idle.latest_readings = readings_idle
+
+        assessment_idle = self.engine.evaluate_device(status_idle)
+        self.assertEqual(assessment_idle.overall_severity, SafetySeverity.WARNING)
+        rule_ids_idle = [v.rule_id for v in assessment_idle.violations]
+        self.assertIn(RULE_PERIMETER_INTRUSION, rule_ids_idle)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -24,6 +24,9 @@ export interface SensorReadings {
   temperature_c?: number | null;
   machine_enabled?: boolean | null;
   machine_running?: boolean | null;
+  water_flow_lpm?: number | null;
+  camera_intrusion_detected?: boolean | null;
+  radiation_level?: number | null;
 }
 
 export interface SafetyViolation {

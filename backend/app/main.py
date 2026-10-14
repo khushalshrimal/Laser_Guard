@@ -1,13 +1,13 @@
 """
 LaserGuard AI - Smart Laser-Cutting Machine Safety & Monitoring System
 FastAPI Backend Entry Point, Telemetry Ingestion API, Device Health Registry,
-Safety Rules Engine, and WebSocket Live Updates
+Safety Rules Engine, Blackbox Event Store, and WebSocket Live Updates
 """
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Depends, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, status, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import (
@@ -17,33 +17,47 @@ from app.schemas import (
     SensorReadings,
     SystemStatusResponse,
     SystemSafetyResponse,
+    EventHistoryResponse,
+    SafetySeverity,
     SafetyThresholdsConfig,
     normalize_to_utc_iso,
 )
 from app.registry import DeviceRegistry, get_device_registry
 from app.websocket_manager import WebSocketManager, get_ws_manager
 from app.safety_engine import SafetyEngine, get_safety_engine
+from app.event_store import EventStore, get_event_store
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Application lifecycle management:
-    Initializes and starts background stale detection monitoring on startup;
+    Initializes database schema and starts background stale detection monitoring on startup;
     gracefully terminates tasks on shutdown.
     """
     ws_mgr = get_ws_manager()
     reg = get_device_registry()
     safety_eng = get_safety_engine()
-    ws_mgr.start_stale_monitor(reg, safety_engine=safety_eng, interval=2.0)
+    event_store = get_event_store()
+
+    # Ensure SQLite database schema and indexes are initialized
+    event_store.init_db()
+
+    # Start background stale monitoring loop with safety and event store integration
+    ws_mgr.start_stale_monitor(
+        registry=reg,
+        safety_engine=safety_eng,
+        event_store=event_store,
+        interval=2.0,
+    )
     yield
     await ws_mgr.stop_stale_monitor()
 
 
 app = FastAPI(
     title="LaserGuard AI API",
-    description="Backend API, Telemetry Ingestion, Device Health Registry, Safety Rules Engine, and WebSocket Live Stream for LaserGuard AI",
-    version="0.5.0-safety-rules-engine",
+    description="Backend API, Telemetry Ingestion, Device Health Registry, Safety Rules Engine, Blackbox Event Store, and WebSocket Live Stream for LaserGuard AI",
+    version="0.6.0-blackbox-event-store",
     lifespan=lifespan,
 )
 
@@ -74,6 +88,7 @@ def read_root() -> Dict[str, Any]:
         "ingest_endpoint": "/ingest",
         "status_endpoint": "/api/status",
         "safety_endpoint": "/api/safety",
+        "events_endpoint": "/api/events",
         "websocket_endpoint": "/ws/status",
         "status": "online",
     }
@@ -88,11 +103,11 @@ def get_health() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "app": "LaserGuard AI",
-        "version": "0.5.0-safety-rules-engine",
+        "version": "0.6.0-blackbox-event-store",
         "environment": "development",
         "hardware_connected": False,
         "active_source": "NONE",
-        "notice": "Safety rules engine active at GET /api/safety. WebSocket live stream at /ws/status, ingestion at POST /ingest, status at GET /api/status. Software decision-support only; no physical hardware or e-stop actuation attached.",
+        "notice": "SQLite blackbox event logging active at GET /api/events. Safety rules engine at GET /api/safety, WebSocket live stream at /ws/status, ingestion at POST /ingest. Software decision-support only; no physical hardware or e-stop actuation attached.",
     }
 
 
@@ -108,6 +123,7 @@ async def ingest_telemetry(
     registry: DeviceRegistry = Depends(get_device_registry),
     ws_manager: WebSocketManager = Depends(get_ws_manager),
     safety_engine: SafetyEngine = Depends(get_safety_engine),
+    event_store: EventStore = Depends(get_event_store),
 ) -> TelemetryIngestResponse:
     """
     Ingest a telemetry frame from either physical HARDWARE (ESP32) or SIMULATOR.
@@ -116,10 +132,9 @@ async def ingest_telemetry(
     - Rejects uncalibrated extra fields, invalid types, and out-of-range sensor values (HTTP 422).
     - Normalizes timestamps to standard ISO 8601 UTC representation.
     - Updates in-memory device registry with latest valid frame and server receive timestamp.
-    - Evaluates safety rules and publishes updated snapshot to WebSocket clients (/ws/status).
+    - Evaluates safety rules and logs meaningful state transitions to the persistent SQLite blackbox.
+    - Publishes updated snapshot to WebSocket clients (/ws/status).
     - Returns ingestion acknowledgement along with normalized data frame.
-
-    Safety Notice: Persistence and physical actuator control are future milestones.
     """
     server_time = datetime.now(timezone.utc)
     ingested_at = normalize_to_utc_iso(server_time)
@@ -137,7 +152,27 @@ async def ingest_telemetry(
     # 1. Update in-memory device registry with latest valid frame
     registry.register_telemetry(normalized_frame, server_received_at=server_time)
 
-    # 2. Asynchronously broadcast status update enriched with safety evaluation to WebSocket clients
+    # 2. Evaluate real-time safety for this device
+    dev_status = registry.get_device_status(normalized_frame.device_id, now=server_time)
+    if dev_status:
+        dev_safety = safety_engine.evaluate_device(dev_status, evaluated_at=server_time)
+        dev_status.safety = dev_safety
+
+        # 3. Record state transitions in SQLite blackbox (if meaningful transition occurred)
+        try:
+            event_store.process_assessment_transition(
+                assessment=dev_safety,
+                connectivity_state=dev_status.connectivity_state,
+                timestamp=server_time,
+            )
+        except Exception as e:
+            # Report storage error clearly rather than silently swallowing
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to record event in blackbox audit store: {str(e)}",
+            )
+
+    # 4. Asynchronously broadcast status update enriched with safety evaluation to WebSocket clients
     await ws_manager.broadcast_status(
         registry,
         safety_engine=safety_engine,
@@ -233,6 +268,49 @@ def get_safety(
         registry=registry,
         thresholds=thresholds,
         filter_device_id=device_id,
+    )
+
+
+@app.get(
+    "/api/events",
+    response_model=EventHistoryResponse,
+    tags=["Blackbox Events"],
+    summary="Query persistent blackbox event audit history",
+)
+def get_events(
+    device_id: Optional[str] = None,
+    severity: Optional[str] = None,
+    event_type: Optional[str] = None,
+    limit: int = 50,
+    before_id: Optional[int] = None,
+    event_store: EventStore = Depends(get_event_store),
+) -> EventHistoryResponse:
+    """
+    Retrieve persistent blackbox safety and connectivity event audit log.
+
+    - Ordered newest-first (descending by event ID).
+    - Supports filtering by device_id, severity (CRITICAL, WARNING, NORMAL, UNKNOWN), and event_type.
+    - Pagination supported using cursor parameter 'before_id'.
+    - Safe default limit of 50 (maximum 200).
+    - Note: Unauthenticated read-only endpoint for hackathon demo / local runtime.
+    """
+    if severity and severity.upper() not in [s.value for s in SafetySeverity]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid severity '{severity}'. Allowed: {[s.value for s in SafetySeverity]}",
+        )
+    if limit < 1 or limit > 200:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Limit must be between 1 and 200.",
+        )
+
+    return event_store.query_events(
+        device_id=device_id,
+        severity=severity,
+        event_type=event_type,
+        limit=limit,
+        before_id=before_id,
     )
 
 

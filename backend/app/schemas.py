@@ -256,6 +256,38 @@ class WebSocketMessage(BaseModel):
     )
 
 
+class BlackboxEvent(BaseModel):
+    """
+    Persistent audit log record of a meaningful safety or connectivity event.
+    """
+    id: int = Field(description="Unique autoincrement database record identifier")
+    timestamp: str = Field(description="UTC timestamp when the event was recorded (ISO 8601)")
+    event_type: str = Field(description="Category: SAFETY_TRANSITION, RULE_ACTIVATION, RULE_CLEARANCE, or CONNECTIVITY_TRANSITION")
+    device_id: str = Field(description="Device identifier involved in the event")
+    source: TelemetrySource = Field(description="Origin source: HARDWARE or SIMULATOR")
+    severity: Optional[SafetySeverity] = Field(default=None, description="Severity: CRITICAL, WARNING, UNKNOWN, or NORMAL")
+    rule_id: Optional[str] = Field(default=None, description="Stable rule or event identifier")
+    recommended_state: Optional[RecommendedMachineState] = Field(default=None, description="Recommended machine operational state")
+    message: str = Field(description="Human-readable event description")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Structured event context and sensor values")
+
+
+class EventHistoryResponse(BaseModel):
+    """
+    Response schema for GET /api/events returning blackbox audit history.
+    """
+    status: str = Field(default="ok", description="API response status")
+    count: int = Field(description="Number of events returned in this query")
+    total_count: int = Field(description="Total matching events in the database")
+    limit: int = Field(description="Requested limit constraint")
+    before_id: Optional[int] = Field(default=None, description="Cursor ID used for pagination")
+    events: List[BlackboxEvent] = Field(description="List of recorded events in descending order (newest first)")
+    disclaimer: str = Field(
+        default="Persistent blackbox audit log. Software decision-support records only; does not certify physical sensor or hardware interlock actuation.",
+        description="Notice regarding software audit record limitations"
+    )
+
+
 def normalize_to_utc_iso(dt: Optional[datetime]) -> str:
     """
     Normalize an optional datetime into a standardized ISO 8601 UTC string.

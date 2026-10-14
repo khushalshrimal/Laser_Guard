@@ -22,19 +22,23 @@ Laser_Guard/
 ├── backend/                      # Python + FastAPI Backend
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── main.py              # FastAPI entry point, CORS, /health, /ingest, /api/status, /api/safety, /ws/status
+│   │   ├── main.py              # FastAPI entry point, CORS, /health, /ingest, /api/status, /api/safety, /api/events, /ws/status
+│   │   ├── event_store.py       # SQLite blackbox event store, transition auditing, retention pruning
 │   │   ├── registry.py          # In-memory device registry & stale-data detection
 │   │   ├── safety_engine.py     # Safety rules engine & fail-safe evaluation
-│   │   ├── schemas.py           # Pydantic telemetry contract, safety models, WebSocket envelopes
+│   │   ├── schemas.py           # Pydantic telemetry contract, safety models, blackbox event schemas
 │   │   └── websocket_manager.py # WebSocket client pool, initial snapshot, live broadcast
+│   ├── data/                    # Git-ignored local SQLite runtime directory
+│   │   └── laserguard_blackbox.db
 │   ├── tests/
 │   │   ├── __init__.py
+│   │   ├── test_event_store.py  # Automated unit & integration tests for blackbox SQLite store
 │   │   ├── test_health.py       # Automated unit tests for /health & /
 │   │   ├── test_ingest.py       # Automated unit tests for POST /ingest validation
 │   │   ├── test_safety.py       # Automated unit tests for safety rules engine & severity precedence
 │   │   ├── test_status.py       # Automated unit tests for device status & stale detection
 │   │   └── test_websocket.py    # Automated unit tests for WebSocket live stream & stale broadcast
-│   ├── .env.example             # Example configuration (STALE_THRESHOLD, HIGH_TEMP, ELEVATED_SMOKE)
+│   ├── .env.example             # Example configuration (STALE_THRESHOLD, DATABASE_PATH, MAX_EVENTS_RETAINED)
 │   ├── requirements.txt         # Pinned backend dependencies
 │   └── .venv/                   # Python virtual environment (ignored by git)
 │
@@ -501,7 +505,95 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/safety?device_id=esp32-cutter-
 
 ---
 
+## SQLite Blackbox Event Logging (`GET /api/events`)
+
+LaserGuard AI records an immutable audit history of safety-critical events in a local SQLite blackbox store (`backend/data/laserguard_blackbox.db`), surviving application restarts.
+
+### Logged Event Categories
+1. **`SAFETY_TRANSITION`**: Overall device severity changes (e.g., `NORMAL -> WARNING`, `WARNING -> CRITICAL`).
+2. **`RULE_ACTIVATION`**: Specific safety rule violation activated (e.g., `RULE_FIRE_DETECTED`, `RULE_UNAUTHORIZED_RUNNING`).
+3. **`RULE_CLEARANCE`**: Safety condition cleared back to nominal (e.g., hazard resolved).
+4. **`CONNECTIVITY_TRANSITION`**: Telemetry heartbeat timeouts (`ONLINE -> STALE`) and recovery (`STALE -> ONLINE`).
+
+### Noise & Deduplication Protection
+- Continuous identical telemetry frames do **not** generate repetitive event spam.
+- In-memory transition trackers ensure events are only appended to SQLite when a genuine state change occurs.
+
+### Storage & Retention Configuration
+- **Database Engine**: Python built-in `sqlite3` using Write-Ahead Logging (`PRAGMA journal_mode=WAL`) and `PRAGMA synchronous=NORMAL`.
+- **Database Path**: Defaults to `backend/data/laserguard_blackbox.db` (configurable via `DATABASE_PATH`). Excluded from Git via `.gitignore`.
+- **Retention Pruning**: Automatically prunes oldest records beyond `MAX_EVENTS_RETAINED` (default: 10,000; range: 100 to 1,000,000).
+
+### Query Parameters & Pagination
+`GET /api/events` supports:
+- `device_id`: Filter by specific device string.
+- `severity`: Filter by `CRITICAL`, `WARNING`, `NORMAL`, or `UNKNOWN`.
+- `event_type`: Filter by event category (`SAFETY_TRANSITION`, `RULE_ACTIVATION`, `RULE_CLEARANCE`, `CONNECTIVITY_TRANSITION`).
+- `limit`: Number of records to return (1–200, default 50).
+- `before_id`: Cursor pagination ID (returns events with `id < before_id`, ordered newest-first).
+
+> **Authentication Notice**: For local hackathon demonstration and testing purposes, `GET /api/events` is currently unauthenticated and read-only. Authentication and role-based access control should be added prior to production industrial deployment.
+
+### Example `GET /api/events` Response (`200 OK`)
+```json
+{
+  "status": "ok",
+  "count": 2,
+  "total_count": 2,
+  "limit": 50,
+  "before_id": null,
+  "events": [
+    {
+      "id": 2,
+      "timestamp": "2026-10-14T11:20:00.123456Z",
+      "event_type": "RULE_ACTIVATION",
+      "device_id": "esp32-cutter-01",
+      "source": "HARDWARE",
+      "severity": "CRITICAL",
+      "rule_id": "RULE_FIRE_DETECTED",
+      "recommended_state": "STOP_RECOMMENDED",
+      "message": "Safety rule activated: Optical flame sensor active: fire hazard detected.",
+      "details": {
+        "flame_detected": true
+      }
+    },
+    {
+      "id": 1,
+      "timestamp": "2026-10-14T11:20:00.123456Z",
+      "event_type": "SAFETY_TRANSITION",
+      "device_id": "esp32-cutter-01",
+      "source": "HARDWARE",
+      "severity": "CRITICAL",
+      "rule_id": null,
+      "recommended_state": "STOP_RECOMMENDED",
+      "message": "Safety assessment transitioned from NORMAL to CRITICAL.",
+      "details": {
+        "previous_severity": "NORMAL",
+        "new_severity": "CRITICAL",
+        "recommended_state": "STOP_RECOMMENDED",
+        "violation_count": 1
+      }
+    }
+  ]
+}
+```
+
+### PowerShell Query Commands
+```powershell
+# Retrieve latest 50 blackbox events
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/events" -Method Get
+
+# Filter by device and severity
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/events?device_id=esp32-cutter-01&severity=CRITICAL" -Method Get
+
+# Paginate with limit and before_id
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/events?limit=10&before_id=45" -Method Get
+```
+
+---
+
 ## License & Team
 LaserGuard AI is created for Hackathon SKIT014.
+
 
 

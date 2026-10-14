@@ -124,14 +124,15 @@ class WebSocketManager:
         self,
         registry: DeviceRegistry,
         safety_engine: Optional[Any] = None,
+        event_store: Optional[Any] = None,
         now: Optional[datetime] = None,
     ) -> bool:
         """
         Check if any registered device transitioned from ONLINE to STALE.
-        If a transition is detected, broadcast an updated snapshot with event 'stale_transition'.
+        If a transition is detected, record event in blackbox store and broadcast 'stale_transition'.
         Returns True if a transition broadcast was dispatched, False otherwise.
         """
-        if not self._active_connections:
+        if not self._active_connections and event_store is None:
             return False
 
         snapshot: SystemStatusResponse = registry.get_system_status(now=now)
@@ -146,18 +147,25 @@ class WebSocketManager:
             if prev_state != dev.connectivity_state:
                 state_changed = True
                 self._last_known_states[dev.device_id] = dev.connectivity_state
+                if event_store and dev.safety:
+                    event_store.process_assessment_transition(
+                        assessment=dev.safety,
+                        connectivity_state=dev.connectivity_state,
+                        timestamp=now,
+                    )
 
-        if state_changed:
+        if state_changed and self._active_connections:
             msg = WebSocketMessage(event="stale_transition", data=snapshot)
             await self.broadcast(msg)
             return True
 
-        return False
+        return state_changed
 
     def start_stale_monitor(
         self,
         registry: DeviceRegistry,
         safety_engine: Optional[Any] = None,
+        event_store: Optional[Any] = None,
         interval: float = 2.0,
     ) -> None:
         """Start a background task to periodically detect stale transitions."""
@@ -167,7 +175,7 @@ class WebSocketManager:
         try:
             loop = asyncio.get_running_loop()
             self._monitor_task = loop.create_task(
-                self._stale_monitor_loop(registry, safety_engine, interval)
+                self._stale_monitor_loop(registry, safety_engine, event_store, interval)
             )
         except RuntimeError:
             # No running event loop yet (e.g. before uvicorn/fastapi starts)
@@ -177,13 +185,16 @@ class WebSocketManager:
         self,
         registry: DeviceRegistry,
         safety_engine: Optional[Any],
+        event_store: Optional[Any],
         interval: float,
     ) -> None:
         """Periodic background loop checking for stale transitions."""
         while self._is_monitoring:
             try:
                 await asyncio.sleep(interval)
-                await self.check_and_broadcast_stale(registry, safety_engine=safety_engine)
+                await self.check_and_broadcast_stale(
+                    registry, safety_engine=safety_engine, event_store=event_store
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:

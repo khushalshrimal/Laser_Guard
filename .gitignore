@@ -43,8 +43,13 @@ dist-ssr/
 
 # Databases
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
+data/
+backend/data/
 
 # Logs
 *.log

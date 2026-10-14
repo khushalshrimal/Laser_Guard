@@ -19,10 +19,22 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
 }) => {
   // Settings Form State
   const [activeTab, setActiveTab] = useState<'thresholds' | 'network' | 'general'>('thresholds');
-  const [gasThreshold, setGasThreshold] = useState<number>(50.0);
-  const [tempThreshold, setTempThreshold] = useState<number>(60.0);
-  const [flowThreshold, setFlowThreshold] = useState<number>(1.0);
-  const [staleThreshold, setStaleThreshold] = useState<number>(10.0);
+  const [gasThreshold, setGasThreshold] = useState<number>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('laserguard_th_gas') : null;
+    return saved ? Number(saved) : 50.0;
+  });
+  const [tempThreshold, setTempThreshold] = useState<number>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('laserguard_th_temp') : null;
+    return saved ? Number(saved) : 60.0;
+  });
+  const [flowThreshold, setFlowThreshold] = useState<number>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('laserguard_th_flow') : null;
+    return saved ? Number(saved) : 1.0;
+  });
+  const [staleThreshold, setStaleThreshold] = useState<number>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('laserguard_th_stale') : null;
+    return saved ? Number(saved) : 10.0;
+  });
   const [isSaved, setIsSaved] = useState<boolean>(false);
 
   // Simulator Controls State
@@ -31,6 +43,14 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
   const [lastTriggerResult, setLastTriggerResult] = useState<string | null>(null);
 
   const handleSaveSettings = () => {
+    try {
+      localStorage.setItem('laserguard_th_gas', String(gasThreshold));
+      localStorage.setItem('laserguard_th_temp', String(tempThreshold));
+      localStorage.setItem('laserguard_th_flow', String(flowThreshold));
+      localStorage.setItem('laserguard_th_stale', String(staleThreshold));
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2500);
   };
@@ -154,7 +174,9 @@ export const SettingsSimulatorPage: React.FC<SettingsSimulatorPageProps> = ({
         <div className="lg:col-span-5 rounded-2xl border border-slate-800 bg-[#101522] p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-cyan-400" /> System Threshold Settings
+              <Sliders className="w-4 h-4 text-cyan-400" />
+              <span>Threshold Preferences</span>
+              <span className="text-[10px] font-mono text-slate-500 font-normal lowercase">(browser-stored)</span>
             </h4>
             {isSaved && (
               <span className="text-xs font-mono text-emerald-400 font-bold flex items-center gap-1">

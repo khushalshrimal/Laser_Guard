@@ -42,12 +42,14 @@ export const DeviceHealthPage: React.FC<DeviceHealthPageProps> = ({
             </div>
             <span
               className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
-                isStale
+                !device
+                  ? 'bg-slate-800 text-slate-400 border-slate-700'
+                  : isStale
                   ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                   : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
               }`}
             >
-              {isStale ? 'STALE' : 'ONLINE'}
+              {!device ? 'OFFLINE' : isStale ? 'STALE' : 'ONLINE'}
             </span>
           </div>
           <div className="text-xs font-mono text-slate-300">

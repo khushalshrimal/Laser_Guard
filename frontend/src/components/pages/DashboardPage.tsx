@@ -42,6 +42,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const isRunning = readings.machine_running || false;
   const isStale = device?.connectivity_state === 'STALE';
   const severity = safety?.overall_severity || 'NORMAL';
+  const sensorValues = [
+    readings.temperature_c,
+    readings.smoke_level,
+    readings.water_flow_lpm,
+    readings.flame_detected,
+    readings.door_open,
+  ];
+  const reportedSensorsCount = device ? sensorValues.filter((v) => v !== null && v !== undefined).length : 0;
 
   // Toggle in-charge permission
   const handleTogglePermission = async () => {
@@ -100,13 +108,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               <h3 className="text-base font-bold text-white tracking-wide">Machine Status</h3>
               <span
                 className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold flex items-center gap-1 ${
-                  isStale
+                  !device
+                    ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                    : isStale
                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 }`}
               >
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                {isStale ? 'STALE' : 'ONLINE'}
+                <CheckCircle2
+                  className={`w-3 h-3 ${
+                    !device ? 'text-slate-500' : isStale ? 'text-amber-400' : 'text-emerald-400'
+                  }`}
+                />
+                {!device ? 'NO DEVICE' : isStale ? 'STALE' : 'ONLINE'}
               </span>
             </div>
 
@@ -153,6 +167,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
+              title="Designated safety officer permission switch. Disarming stops authorized cutting."
             >
               ON
             </button>
@@ -163,6 +178,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
+              title="Disarms safety permission and locks machine interlock."
             >
               OFF
             </button>
@@ -188,6 +204,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <button
               onClick={handleStartCutting}
               className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/25 transition-all"
+              title="Dispatches nominal operation simulation payload to POST /ingest"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
               <span>Start (Sim)</span>
@@ -196,6 +213,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <button
               onClick={handleStopCutting}
               className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center justify-center gap-1.5 border border-slate-700 transition-all"
+              title="Dispatches idle state simulation payload to POST /ingest"
             >
               <Square className="w-3.5 h-3.5 fill-current" />
               <span>Stop (Sim)</span>
@@ -205,6 +223,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           <button
             onClick={handleEmergencyStop}
             className="w-full py-2 px-3 rounded-xl bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-mono font-bold flex items-center justify-center gap-2 shadow-md shadow-rose-600/20 transition-all"
+            title="Software simulation safety stop (dispatches door-trip fail-safe payload to POST /ingest; physical contactor not energized)"
           >
             <AlertOctagon className="w-4 h-4" />
             <span>Emergency Stop</span>
@@ -262,8 +281,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               </div>
               <span className="text-xs font-bold text-white">MQ-2 Smoke/Gas</span>
             </div>
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
-              ONLINE
+            <span
+              className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                readings.smoke_level === null || readings.smoke_level === undefined
+                  ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                  : (readings.smoke_level ?? 0) >= 50
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+              }`}
+            >
+              {readings.smoke_level === null || readings.smoke_level === undefined
+                ? 'UNREPORTED'
+                : (readings.smoke_level ?? 0) >= 50
+                ? 'ELEVATED'
+                : 'ONLINE'}
             </span>
           </div>
 
@@ -271,14 +302,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <div className="text-sm font-extrabold font-mono text-white">
               {readings.smoke_level !== null && readings.smoke_level !== undefined
                 ? `${readings.smoke_level.toFixed(1)} ppm`
-                : '18.0 ppm'}
+                : '-- ppm'}
             </div>
             <div className="text-[10px] text-slate-500 font-mono">
-              {(readings.smoke_level ?? 0) >= 50 ? 'ELEVATED' : 'Safe (< 50 ppm)'}
+              {readings.smoke_level === null || readings.smoke_level === undefined
+                ? 'No reading received'
+                : (readings.smoke_level ?? 0) >= 50
+                ? 'ELEVATED HAZARD'
+                : 'Safe (< 50 ppm)'}
             </div>
           </div>
 
-          <Sparkline data={gasHistory.length > 1 ? gasHistory : [12, 14, 13, 16, 18]} color="#10b981" width={160} height={32} />
+          <Sparkline data={gasHistory.length > 1 ? gasHistory : [0, 0]} color="#10b981" width={160} height={32} />
         </div>
 
         {/* DS18B20 Temperature */}
@@ -290,8 +325,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               </div>
               <span className="text-xs font-bold text-white">Temperature</span>
             </div>
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold">
-              DS18B20
+            <span
+              className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                readings.temperature_c === null || readings.temperature_c === undefined
+                  ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                  : (readings.temperature_c ?? 0) >= 60
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+              }`}
+            >
+              {readings.temperature_c === null || readings.temperature_c === undefined
+                ? 'UNREPORTED'
+                : (readings.temperature_c ?? 0) >= 60
+                ? 'OVERHEAT'
+                : 'ONLINE'}
             </span>
           </div>
 
@@ -303,14 +350,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             >
               {readings.temperature_c !== null && readings.temperature_c !== undefined
                 ? `${readings.temperature_c.toFixed(1)} °C`
-                : '28.5 °C'}
+                : '-- °C'}
             </div>
             <div className="text-[10px] text-slate-500 font-mono">
-              {(readings.temperature_c ?? 0) >= 60 ? 'OVERHEAT LIMIT' : 'Normal (20-60°C)'}
+              {readings.temperature_c === null || readings.temperature_c === undefined
+                ? 'No reading received'
+                : (readings.temperature_c ?? 0) >= 60
+                ? 'OVERHEAT LIMIT'
+                : 'Normal (20-60°C)'}
             </div>
           </div>
 
-          <Sparkline data={tempHistory.length > 1 ? tempHistory : [25, 26, 27, 28, 28.5]} color="#0ea5e9" width={160} height={32} />
+          <Sparkline data={tempHistory.length > 1 ? tempHistory : [0, 0]} color="#0ea5e9" width={160} height={32} />
         </div>
 
         {/* YF-S201 Water Flow */}
@@ -322,8 +373,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               </div>
               <span className="text-xs font-bold text-white">Water Flow</span>
             </div>
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
-              YF-S201
+            <span
+              className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                readings.water_flow_lpm === null || readings.water_flow_lpm === undefined
+                  ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                  : (readings.water_flow_lpm ?? 5) < 1.0 && isRunning
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+              }`}
+            >
+              {readings.water_flow_lpm === null || readings.water_flow_lpm === undefined
+                ? 'UNREPORTED'
+                : (readings.water_flow_lpm ?? 5) < 1.0 && isRunning
+                ? 'FLOW LOW'
+                : 'ONLINE'}
             </span>
           </div>
 
@@ -335,14 +398,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             >
               {readings.water_flow_lpm !== null && readings.water_flow_lpm !== undefined
                 ? `${readings.water_flow_lpm.toFixed(1)} L/min`
-                : '4.5 L/min'}
+                : '-- L/min'}
             </div>
             <div className="text-[10px] text-slate-500 font-mono">
-              {(readings.water_flow_lpm ?? 5) < 1.0 && isRunning ? 'FLOW CRITICAL' : 'Normal (1-10 L/m)'}
+              {readings.water_flow_lpm === null || readings.water_flow_lpm === undefined
+                ? 'No reading received'
+                : (readings.water_flow_lpm ?? 5) < 1.0 && isRunning
+                ? 'FLOW CRITICAL'
+                : 'Normal (1-10 L/m)'}
             </div>
           </div>
 
-          <Sparkline data={flowHistory.length > 1 ? flowHistory : [4.2, 4.3, 4.5, 4.4, 4.5]} color="#06b6d4" width={160} height={32} />
+          <Sparkline data={flowHistory.length > 1 ? flowHistory : [0, 0]} color="#06b6d4" width={160} height={32} />
         </div>
 
         {/* ESP32 Controller Health */}
@@ -388,7 +455,25 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <h4 className="text-xs font-bold text-white uppercase tracking-wider">
               Overall System Health
             </h4>
-            <span className="text-[10px] font-mono text-emerald-400 font-bold">100% OK</span>
+            <span
+              className={`text-[10px] font-mono font-bold ${
+                !device
+                  ? 'text-slate-400'
+                  : severity === 'CRITICAL'
+                  ? 'text-rose-400'
+                  : severity === 'WARNING'
+                  ? 'text-amber-400'
+                  : 'text-emerald-400'
+              }`}
+            >
+              {!device
+                ? '-- AWAITING'
+                : severity === 'CRITICAL'
+                ? '0% CRITICAL'
+                : severity === 'WARNING'
+                ? '75% WARNING'
+                : '100% OK'}
+            </span>
           </div>
 
           {/* Donut Gauge Visual */}
@@ -402,31 +487,33 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 stroke={severity === 'CRITICAL' ? '#ef4444' : severity === 'WARNING' ? '#f59e0b' : '#10b981'}
                 strokeWidth="8"
                 strokeDasharray="251.2"
-                strokeDashoffset={severity === 'CRITICAL' ? '120' : '20'}
+                strokeDashoffset={severity === 'CRITICAL' ? '120' : severity === 'WARNING' ? '60' : '20'}
                 strokeLinecap="round"
                 fill="none"
                 className="transition-all duration-500"
               />
             </svg>
             <div className="absolute flex flex-col items-center justify-center">
-              <span className="text-xl font-bold font-mono text-white">5/5</span>
-              <span className="text-[9px] font-mono text-slate-400">Sensors Online</span>
+              <span className="text-xl font-bold font-mono text-white">
+                {reportedSensorsCount}/5
+              </span>
+              <span className="text-[9px] font-mono text-slate-400">Sensors Active</span>
             </div>
           </div>
 
           {/* Status Breakdown Legend */}
           <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-slate-400 border-t border-slate-800/80 pt-2">
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" /> Online: 5
+              <span className="w-2 h-2 rounded-full bg-emerald-500" /> Active: {reportedSensorsCount}
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-rose-500" /> Offline: 0
+              <span className="w-2 h-2 rounded-full bg-slate-500" /> Missing: {5 - reportedSensorsCount}
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-500" /> Faults: {severity === 'CRITICAL' ? 1 : 0}
+              <span className="w-2 h-2 rounded-full bg-rose-500" /> Faults: {severity === 'CRITICAL' ? 1 : 0}
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-cyan-500" /> Warming: 0
+              <span className="w-2 h-2 rounded-full bg-amber-500" /> Warning: {severity === 'WARNING' ? 1 : 0}
             </div>
           </div>
         </div>

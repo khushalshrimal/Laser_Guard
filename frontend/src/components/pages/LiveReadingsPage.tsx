@@ -26,10 +26,10 @@ export const LiveReadingsPage: React.FC<LiveReadingsPageProps> = ({
   const readings = device?.latest_readings || {};
   const isStale = device?.connectivity_state === 'STALE';
 
-  const gas = readings.smoke_level ?? 18.0;
-  const temp = readings.temperature_c ?? 28.5;
-  const flow = readings.water_flow_lpm ?? 4.5;
-  const flame = readings.flame_detected ?? false;
+  const gas = readings.smoke_level;
+  const temp = readings.temperature_c;
+  const flow = readings.water_flow_lpm;
+  const flame = readings.flame_detected;
 
   return (
     <div className="space-y-6">
@@ -43,11 +43,21 @@ export const LiveReadingsPage: React.FC<LiveReadingsPageProps> = ({
             </div>
             <div>
               <div className="text-xs text-slate-400 font-mono">Gas / Smoke (MQ-2)</div>
-              <div className="text-lg font-bold font-mono text-white mt-0.5">{gas.toFixed(1)} ppm</div>
+              <div className="text-lg font-bold font-mono text-white mt-0.5">
+                {gas !== null && gas !== undefined ? `${gas.toFixed(1)} ppm` : '-- ppm'}
+              </div>
             </div>
           </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
-            {gas >= 50 ? 'WARNING' : 'NORMAL'}
+          <span
+            className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
+              gas === null || gas === undefined
+                ? 'bg-slate-800 text-slate-400 border-slate-700'
+                : gas >= 50
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+            }`}
+          >
+            {gas === null || gas === undefined ? 'UNREPORTED' : gas >= 50 ? 'WARNING' : 'NORMAL'}
           </span>
         </div>
 
@@ -59,17 +69,21 @@ export const LiveReadingsPage: React.FC<LiveReadingsPageProps> = ({
             </div>
             <div>
               <div className="text-xs text-slate-400 font-mono">Flame Sensor</div>
-              <div className="text-lg font-bold font-mono text-white mt-0.5">{flame ? 'FIRE 1' : '0 (CLEAR)'}</div>
+              <div className="text-lg font-bold font-mono text-white mt-0.5">
+                {flame === null || flame === undefined ? '--' : flame ? 'FIRE 1' : '0 (CLEAR)'}
+              </div>
             </div>
           </div>
           <span
             className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
-              flame
+              flame === null || flame === undefined
+                ? 'bg-slate-800 text-slate-400 border-slate-700'
+                : flame
                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/30 animate-pulse'
                 : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
             }`}
           >
-            {flame ? 'ALERT' : 'SECURE'}
+            {flame === null || flame === undefined ? 'UNREPORTED' : flame ? 'ALERT' : 'SECURE'}
           </span>
         </div>
 
@@ -81,17 +95,21 @@ export const LiveReadingsPage: React.FC<LiveReadingsPageProps> = ({
             </div>
             <div>
               <div className="text-xs text-slate-400 font-mono">Temperature</div>
-              <div className="text-lg font-bold font-mono text-white mt-0.5">{temp.toFixed(1)} °C</div>
+              <div className="text-lg font-bold font-mono text-white mt-0.5">
+                {temp !== null && temp !== undefined ? `${temp.toFixed(1)} °C` : '-- °C'}
+              </div>
             </div>
           </div>
           <span
             className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
-              temp >= 60
+              temp === null || temp === undefined
+                ? 'bg-slate-800 text-slate-400 border-slate-700'
+                : temp >= 60
                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
                 : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
             }`}
           >
-            {temp >= 60 ? 'HIGH' : 'NORMAL'}
+            {temp === null || temp === undefined ? 'UNREPORTED' : temp >= 60 ? 'HIGH' : 'NORMAL'}
           </span>
         </div>
 
@@ -103,17 +121,25 @@ export const LiveReadingsPage: React.FC<LiveReadingsPageProps> = ({
             </div>
             <div>
               <div className="text-xs text-slate-400 font-mono">Coolant Flow</div>
-              <div className="text-lg font-bold font-mono text-white mt-0.5">{flow.toFixed(1)} L/min</div>
+              <div className="text-lg font-bold font-mono text-white mt-0.5">
+                {flow !== null && flow !== undefined ? `${flow.toFixed(1)} L/min` : '-- L/min'}
+              </div>
             </div>
           </div>
           <span
             className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
-              flow < 1.0 && readings.machine_running
+              flow === null || flow === undefined
+                ? 'bg-slate-800 text-slate-400 border-slate-700'
+                : flow < 1.0 && readings.machine_running
                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/30 animate-pulse'
                 : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
             }`}
           >
-            {flow < 1.0 && readings.machine_running ? 'LOW FLOW' : 'NOMINAL'}
+            {flow === null || flow === undefined
+              ? 'UNREPORTED'
+              : flow < 1.0 && readings.machine_running
+              ? 'LOW FLOW'
+              : 'NOMINAL'}
           </span>
         </div>
       </div>
@@ -177,41 +203,85 @@ export const LiveReadingsPage: React.FC<LiveReadingsPageProps> = ({
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
                 <tr>
                   <td className="py-2.5 font-bold text-white">Chamber Temperature</td>
-                  <td className="py-2.5 text-amber-400">{temp.toFixed(1)} °C</td>
+                  <td className="py-2.5 text-amber-400">
+                    {temp !== null && temp !== undefined ? `${temp.toFixed(1)} °C` : '-- °C'}
+                  </td>
                   <td className="py-2.5 text-slate-500">&lt; 60.0 °C</td>
                   <td className="py-2.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${temp >= 60 ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                      {temp >= 60 ? 'OVERHEAT' : 'NORMAL'}
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        temp === null || temp === undefined
+                          ? 'bg-slate-800 text-slate-400'
+                          : temp >= 60
+                          ? 'bg-rose-500/20 text-rose-300'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {temp === null || temp === undefined ? 'UNREPORTED' : temp >= 60 ? 'OVERHEAT' : 'NORMAL'}
                     </span>
                   </td>
                 </tr>
                 <tr>
                   <td className="py-2.5 font-bold text-white">MQ-2 Gas / Smoke</td>
-                  <td className="py-2.5 text-emerald-400">{gas.toFixed(1)} ppm</td>
+                  <td className="py-2.5 text-emerald-400">
+                    {gas !== null && gas !== undefined ? `${gas.toFixed(1)} ppm` : '-- ppm'}
+                  </td>
                   <td className="py-2.5 text-slate-500">&lt; 50.0 ppm</td>
                   <td className="py-2.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${gas >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                      {gas >= 50 ? 'ELEVATED' : 'SAFE'}
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        gas === null || gas === undefined
+                          ? 'bg-slate-800 text-slate-400'
+                          : gas >= 50
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {gas === null || gas === undefined ? 'UNREPORTED' : gas >= 50 ? 'ELEVATED' : 'SAFE'}
                     </span>
                   </td>
                 </tr>
                 <tr>
                   <td className="py-2.5 font-bold text-white">YF-S201 Water Flow</td>
-                  <td className="py-2.5 text-cyan-400">{flow.toFixed(1)} L/min</td>
+                  <td className="py-2.5 text-cyan-400">
+                    {flow !== null && flow !== undefined ? `${flow.toFixed(1)} L/min` : '-- L/min'}
+                  </td>
                   <td className="py-2.5 text-slate-500">&ge; 1.0 L/min</td>
                   <td className="py-2.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${flow < 1.0 && readings.machine_running ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                      {flow < 1.0 && readings.machine_running ? 'FLOW FAILURE' : 'OPTIMAL'}
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        flow === null || flow === undefined
+                          ? 'bg-slate-800 text-slate-400'
+                          : flow < 1.0 && readings.machine_running
+                          ? 'bg-rose-500/20 text-rose-300'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {flow === null || flow === undefined
+                        ? 'UNREPORTED'
+                        : flow < 1.0 && readings.machine_running
+                        ? 'FLOW FAILURE'
+                        : 'OPTIMAL'}
                     </span>
                   </td>
                 </tr>
                 <tr>
                   <td className="py-2.5 font-bold text-white">IR Flame Sensor</td>
-                  <td className="py-2.5">{flame ? 'Active Flame' : 'No Flame'}</td>
+                  <td className="py-2.5">
+                    {flame === null || flame === undefined ? '--' : flame ? 'Active Flame' : 'No Flame'}
+                  </td>
                   <td className="py-2.5 text-slate-500">0 (Nominal)</td>
                   <td className="py-2.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${flame ? 'bg-rose-500/20 text-rose-300 animate-pulse' : 'bg-emerald-500/20 text-emerald-300'}`}>
-                      {flame ? 'FIRE HAZARD' : 'CLEAR'}
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        flame === null || flame === undefined
+                          ? 'bg-slate-800 text-slate-400'
+                          : flame
+                          ? 'bg-rose-500/20 text-rose-300 animate-pulse'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {flame === null || flame === undefined ? 'UNREPORTED' : flame ? 'FIRE HAZARD' : 'CLEAR'}
                     </span>
                   </td>
                 </tr>

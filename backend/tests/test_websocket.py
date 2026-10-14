@@ -209,14 +209,14 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
         with self.client.websocket_connect("/ws/status") as ws:
             ws.receive_json()  # Snapshot
 
-            t0 = datetime(2026, 10, 14, 11, 0, 0, tzinfo=timezone.utc)
+            t0 = datetime.now(timezone.utc)
             # Ingest device at t0
             self.client.post(
                 "/ingest",
                 json={
                     "source": "HARDWARE",
                     "device_id": "esp32-stale-detector",
-                    "timestamp": "2026-10-14T11:00:00Z",
+                    "timestamp": t0.isoformat(),
                     "readings": {"temperature_c": 25.0},
                 },
             )

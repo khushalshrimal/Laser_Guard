@@ -4,6 +4,7 @@ Tests camera lifecycle, danger zone ROI validation, mock hand detection,
 error handling, and FastAPI endpoints without requiring physical hardware.
 """
 
+import os
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -132,6 +133,32 @@ class TestCameraServiceUnit(unittest.TestCase):
             status = self.service.get_status()
             self.assertEqual(status.state, CameraLifecycleState.ERROR.value)
             self.assertIn("Detector initialization failure", status.error_message)
+
+    def test_resolve_default_model_path_finds_file(self):
+        model_path = CameraService._resolve_default_model_path()
+        self.assertIsNotNone(model_path)
+        self.assertTrue(os.path.exists(model_path))
+        self.assertTrue(model_path.endswith("hand_landmarker.task"))
+
+    def test_init_detector_real_tasks_api(self):
+        detector, detector_type = self.service._init_detector()
+        self.assertEqual(detector_type, "tasks")
+        self.assertIsNotNone(detector)
+        if hasattr(detector, "close"):
+            detector.close()
+
+    def test_init_detector_missing_model_raises_filenotfound(self):
+        bad_service = CameraService(model_path="nonexistent/path/to/model.task")
+        with self.assertRaises(FileNotFoundError):
+            bad_service._init_detector()
+
+    def test_init_detector_neither_api_raises_runtimeerror(self):
+        with patch("app.camera_service.vision", None), \
+             patch("app.camera_service.BaseOptions", None), \
+             patch("app.camera_service.mp", None):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.service._init_detector()
+            self.assertIn("Neither MediaPipe Tasks HandLandmarker nor Solutions Hands API is available", str(ctx.exception))
 
     @patch("app.camera_service.cv2.VideoCapture")
     def test_successful_start_stop_lifecycle(self, mock_cv2_capture):

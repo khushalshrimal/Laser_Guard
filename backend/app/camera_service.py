@@ -25,9 +25,27 @@ except ImportError:
 
 try:
     import mediapipe as mp
+    try:
+        from mediapipe.tasks.python import BaseOptions
+        from mediapipe.tasks.python import vision
+        MP_TASKS_AVAILABLE = True
+    except (ImportError, AttributeError):
+        BaseOptions = None
+        vision = None
+        MP_TASKS_AVAILABLE = False
+    try:
+        from mediapipe import Image, ImageFormat
+    except (ImportError, AttributeError):
+        Image = getattr(mp, "Image", None)
+        ImageFormat = getattr(mp, "ImageFormat", None)
     MEDIAPIPE_AVAILABLE = True
 except ImportError:
     mp = None
+    BaseOptions = None
+    vision = None
+    MP_TASKS_AVAILABLE = False
+    Image = None
+    ImageFormat = None
     MEDIAPIPE_AVAILABLE = False
 
 
@@ -164,14 +182,15 @@ class CameraService:
     @staticmethod
     def _resolve_default_model_path() -> Optional[str]:
         """Attempt to locate the hand_landmarker.task model file in standard locations."""
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         candidates = [
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "hand_landmarker.task"),
-            os.path.join(os.getcwd(), "models", "hand_landmarker.task"),
+            os.path.join(backend_dir, "models", "hand_landmarker.task"),
             os.path.join(os.getcwd(), "backend", "models", "hand_landmarker.task"),
+            os.path.join(os.getcwd(), "models", "hand_landmarker.task"),
         ]
         for p in candidates:
             if os.path.exists(p):
-                return p
+                return os.path.abspath(p)
         return None
 
     @property
@@ -334,28 +353,34 @@ class CameraService:
         if not self._model_path:
             self._model_path = self._resolve_default_model_path()
 
-        # Check for MediaPipe Tasks API
-        if hasattr(mp, "tasks") and hasattr(mp.tasks, "python") and hasattr(mp.tasks.python, "vision"):
-            vision = mp.tasks.python.vision
-            if hasattr(vision, "HandLandmarker"):
-                if not self._model_path or not os.path.exists(self._model_path):
-                    raise FileNotFoundError(
-                        f"MediaPipe Hand Landmarker model file not found at '{self._model_path}'. "
-                        "Please provide hand_landmarker.task model file."
-                    )
-                base_options = mp.tasks.python.BaseOptions(model_asset_path=self._model_path)
-                options = vision.HandLandmarkerOptions(
-                    base_options=base_options,
-                    running_mode=vision.RunningMode.IMAGE,
-                    num_hands=2,
-                    min_hand_detection_confidence=0.5,
-                    min_tracking_confidence=0.5,
-                )
-                detector = vision.HandLandmarker.create_from_options(options)
-                return detector, "tasks"
+        # Check for MediaPipe Tasks API (explicit module imports or dynamically available)
+        tasks_vision = vision
+        tasks_base_options = BaseOptions
+        if tasks_vision is None and mp is not None and hasattr(mp, "tasks") and hasattr(mp.tasks, "python") and hasattr(mp.tasks.python, "vision"):
+            tasks_vision = mp.tasks.python.vision
+            tasks_base_options = getattr(mp.tasks.python, "BaseOptions", None)
 
-        # Check for legacy MediaPipe Solutions API
-        if hasattr(mp, "solutions") and hasattr(mp.solutions, "hands"):
+        if tasks_vision is not None and hasattr(tasks_vision, "HandLandmarker"):
+            if not self._model_path or not os.path.exists(self._model_path):
+                raise FileNotFoundError(
+                    f"MediaPipe Hand Landmarker model file not found at '{self._model_path}'. "
+                    "Please provide hand_landmarker.task model file."
+                )
+            if tasks_base_options is None:
+                raise RuntimeError("MediaPipe Tasks BaseOptions is not available.")
+            base_options = tasks_base_options(model_asset_path=self._model_path)
+            options = tasks_vision.HandLandmarkerOptions(
+                base_options=base_options,
+                running_mode=tasks_vision.RunningMode.IMAGE,
+                num_hands=2,
+                min_hand_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            detector = tasks_vision.HandLandmarker.create_from_options(options)
+            return detector, "tasks"
+
+        # Check for legacy MediaPipe Solutions API (or test mocks)
+        if mp is not None and hasattr(mp, "solutions") and hasattr(mp.solutions, "hands"):
             detector = mp.solutions.hands.Hands(
                 static_image_mode=False,
                 max_num_hands=2,
@@ -566,7 +591,10 @@ class CameraService:
                 try:
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     if detector_type == "tasks":
-                        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                        img_cls = Image if Image is not None else getattr(mp, "Image", None)
+                        img_fmt = ImageFormat if ImageFormat is not None else getattr(mp, "ImageFormat", None)
+                        srgb_fmt = getattr(img_fmt, "SRGB", 1) if img_fmt is not None else 1
+                        mp_image = img_cls(image_format=srgb_fmt, data=rgb_frame)
                         raw_results = detector.detect(mp_image)
                     else:
                         raw_results = detector.process(rgb_frame)

@@ -3,14 +3,24 @@ LaserGuard AI - Automated Ingestion API Tests
 Validates the POST /ingest endpoint according to the telemetry contract.
 """
 
+import os
 import unittest
+from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.main import app
+from app.registry import default_device_registry
 
 
 class TestTelemetryIngestionContract(unittest.TestCase):
     def setUp(self):
+        default_device_registry.clear()
+        default_device_registry.set_stale_threshold(None)
         self.client = TestClient(app)
+
+    def tearDown(self):
+        default_device_registry.clear()
+        default_device_registry.set_stale_threshold(None)
 
     # 1. Valid HARDWARE Payload
     def test_valid_hardware_payload(self):
@@ -281,6 +291,150 @@ class TestTelemetryIngestionContract(unittest.TestCase):
             "readings": {"camera_intrusion_detected": "intruder_present"},
         })
         self.assertEqual(resp.status_code, 422)
+
+    # 16. Source Arbitration: Active HARDWARE blocks SIMULATOR (HTTP 409)
+    def test_simulator_rejected_when_hardware_is_online(self):
+        # 1. HARDWARE connects and ingests
+        hw_payload = {
+            "source": "HARDWARE",
+            "device_id": "esp32-cutter-01",
+            "readings": {"temperature_c": 25.0},
+        }
+        res_hw = self.client.post("/ingest", json=hw_payload)
+        self.assertEqual(res_hw.status_code, 200)
+
+        # 2. SIMULATOR attempts to ingest while HARDWARE is ONLINE
+        sim_payload = {
+            "source": "SIMULATOR",
+            "device_id": "laser-cutter-01",
+            "readings": {"temperature_c": 30.0},
+        }
+        res_sim = self.client.post("/ingest", json=sim_payload)
+        self.assertEqual(res_sim.status_code, 409)
+        self.assertIn("Simulator telemetry rejected", res_sim.json()["detail"])
+        self.assertIn("Physical HARDWARE is actively connected", res_sim.json()["detail"])
+
+        # Status still reflects HARDWARE
+        status_resp = self.client.get("/api/status").json()
+        self.assertEqual(status_resp["devices"][0]["source"], "HARDWARE")
+
+    # 17. Source Arbitration: Force override allows simulator even if hardware is online
+    def test_simulator_accepted_with_force_override(self):
+        hw_payload = {
+            "source": "HARDWARE",
+            "device_id": "esp32-cutter-01",
+            "readings": {"temperature_c": 25.0},
+        }
+        self.client.post("/ingest", json=hw_payload)
+
+        sim_payload = {
+            "source": "SIMULATOR",
+            "device_id": "laser-cutter-01",
+            "readings": {"temperature_c": 35.0},
+        }
+        res_sim = self.client.post("/ingest?force=true", json=sim_payload)
+        self.assertEqual(res_sim.status_code, 200)
+        self.assertEqual(res_sim.json()["data"]["source"], "SIMULATOR")
+
+    # 18. Source Arbitration: Simulator accepted when hardware is STALE (fallback)
+    def test_simulator_accepted_when_hardware_is_stale(self):
+        # Ingest hardware in the past (exceeding stale threshold)
+        t_past = datetime.now(timezone.utc) - timedelta(seconds=20)
+        hw_payload = {
+            "source": "HARDWARE",
+            "device_id": "esp32-cutter-01",
+            "timestamp": t_past.isoformat(),
+            "readings": {"temperature_c": 25.0},
+        }
+        self.client.post("/ingest", json=hw_payload)
+        # Advance registry reception time to simulate 15s elapsed
+        default_device_registry._machine.last_seen_at = t_past
+
+        # Simulator now attempts to ingest -> hardware is STALE -> allowed
+        sim_payload = {
+            "source": "SIMULATOR",
+            "device_id": "laser-cutter-01",
+            "readings": {"temperature_c": 22.0},
+        }
+        res_sim = self.client.post("/ingest", json=sim_payload)
+        self.assertEqual(res_sim.status_code, 200)
+        self.assertEqual(res_sim.json()["data"]["source"], "SIMULATOR")
+
+    # 19. Source Arbitration: Hardware immediately preempts active simulator
+    def test_hardware_preempts_active_simulator(self):
+        sim_payload = {
+            "source": "SIMULATOR",
+            "device_id": "laser-cutter-01",
+            "readings": {"temperature_c": 22.0},
+        }
+        self.client.post("/ingest", json=sim_payload)
+        self.assertEqual(self.client.get("/api/status").json()["devices"][0]["source"], "SIMULATOR")
+
+        # Hardware arrives -> takes over immediately
+        hw_payload = {
+            "source": "HARDWARE",
+            "device_id": "esp32-cutter-01",
+            "readings": {"temperature_c": 27.0},
+        }
+        res_hw = self.client.post("/ingest", json=hw_payload)
+        self.assertEqual(res_hw.status_code, 200)
+        self.assertEqual(self.client.get("/api/status").json()["devices"][0]["source"], "HARDWARE")
+
+    # 20. Source Arbitration: Disabled via HARDWARE_PRIORITY_ENABLED=false
+    def test_source_arbitration_disabled_via_env(self):
+        with patch.dict(os.environ, {"HARDWARE_PRIORITY_ENABLED": "false"}):
+            self.client.post("/ingest", json={
+                "source": "HARDWARE",
+                "device_id": "esp32-cutter-01",
+                "readings": {"temperature_c": 25.0},
+            })
+            res_sim = self.client.post("/ingest", json={
+                "source": "SIMULATOR",
+                "device_id": "laser-cutter-01",
+                "readings": {"temperature_c": 30.0},
+            })
+            self.assertEqual(res_sim.status_code, 200)
+            self.assertEqual(res_sim.json()["data"]["source"], "SIMULATOR")
+
+    # 21. Hardware Output Guidance in Ingest Response
+    def test_ingest_response_contains_recommended_state_and_buzzer(self):
+        # Nominal operation: normal state, buzzer off
+        nom_resp = self.client.post("/ingest", json={
+            "source": "HARDWARE",
+            "device_id": "laser-cutter-01",
+            "readings": {
+                "door_open": False,
+                "flame_detected": False,
+                "smoke_level": 12.0,
+                "temperature_c": 25.0,
+                "water_flow_lpm": 4.5,
+                "machine_running": True,
+                "machine_enabled": True,
+            },
+        })
+        self.assertEqual(nom_resp.status_code, 200)
+        nom_data = nom_resp.json()
+        self.assertEqual(nom_data["recommended_state"], "NORMAL_OPERATION")
+        self.assertFalse(nom_data["buzzer_recommended"])
+
+        # Fire hazard: stop recommended, buzzer on
+        fire_resp = self.client.post("/ingest", json={
+            "source": "HARDWARE",
+            "device_id": "laser-cutter-01",
+            "readings": {
+                "door_open": False,
+                "flame_detected": True,
+                "smoke_level": 60.0,
+                "temperature_c": 80.0,
+                "water_flow_lpm": 4.5,
+                "machine_running": True,
+                "machine_enabled": True,
+            },
+        })
+        self.assertEqual(fire_resp.status_code, 200)
+        fire_data = fire_resp.json()
+        self.assertEqual(fire_data["recommended_state"], "STOP_RECOMMENDED")
+        self.assertTrue(fire_data["buzzer_recommended"])
 
 
 if __name__ == "__main__":

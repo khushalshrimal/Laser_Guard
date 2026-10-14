@@ -36,6 +36,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 }) => {
   const [inChargePermission, setInChargePermission] = useState<boolean>(true);
   const [buzzerActive, setBuzzerActive] = useState<boolean>(false);
+  const [cameraViewMode, setCameraViewMode] = useState<'2d' | '3d'>('2d');
 
   const readings = device?.latest_readings || {};
   const safety = device?.safety;
@@ -439,18 +440,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
       {/* Row 3: Camera Monitor (6 cols), Overall System Health (3 cols), Recent Alerts (3 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        {/* Camera Monitor (6 cols) */}
-        <div className="lg:col-span-6">
+        {/* Camera Monitor (6 cols in 2D, 12 cols in 3D for spacious dual-panel view) */}
+        <div className={cameraViewMode === '3d' ? 'lg:col-span-12' : 'lg:col-span-6'}>
           <CameraMonitor
             intrusionDetected={readings.camera_intrusion_detected}
+            onViewModeChange={setCameraViewMode}
             onSimulateIntrusion={async (intrude) => {
               await onTriggerScenario(intrude ? 'camera_intrusion' : 'nominal');
             }}
           />
         </div>
 
-        {/* Overall System Health Donut (3 cols) */}
-        <div className="lg:col-span-3 rounded-2xl border border-slate-800 bg-[#101522] p-5 flex flex-col justify-between">
+        {/* Overall System Health Donut (3 cols in 2D, 6 cols in 3D) */}
+        <div className={`${cameraViewMode === '3d' ? 'lg:col-span-6' : 'lg:col-span-3'} rounded-2xl border border-slate-800 bg-[#101522] p-5 flex flex-col justify-between`}>
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider">
               Overall System Health
@@ -518,8 +520,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
         </div>
 
-        {/* Recent Alerts (3 cols) */}
-        <div className="lg:col-span-3 rounded-2xl border border-slate-800 bg-[#101522] p-5 flex flex-col justify-between space-y-2">
+        {/* Recent Alerts (3 cols in 2D, 6 cols in 3D) */}
+        <div className={`${cameraViewMode === '3d' ? 'lg:col-span-6' : 'lg:col-span-3'} rounded-2xl border border-slate-800 bg-[#101522] p-5 flex flex-col justify-between space-y-2`}>
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider">Recent Alerts</h4>
             <span className="text-[10px] font-mono text-slate-400">Live Queue</span>

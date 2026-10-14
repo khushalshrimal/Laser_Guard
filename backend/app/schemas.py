@@ -138,19 +138,6 @@ class NormalizedTelemetryFrame(BaseModel):
     readings: SensorReadings
 
 
-class TelemetryIngestResponse(BaseModel):
-    """
-    Response model returned by POST /ingest acknowledging valid ingestion.
-    """
-    status: str = Field(default="accepted", description="Status indicator ('accepted')")
-    message: str = Field(
-        default="Telemetry frame ingested and normalized successfully",
-        description="Human-readable processing confirmation"
-    )
-    ingested_at: str = Field(description="Server UTC timestamp when payload was received")
-    data: NormalizedTelemetryFrame = Field(description="Normalized accepted payload")
-
-
 class SafetySeverity(str, Enum):
     """
     Standard safety severity classification.
@@ -171,6 +158,28 @@ class RecommendedMachineState(str, Enum):
     INVESTIGATION_RECOMMENDED = "INVESTIGATION_RECOMMENDED"
     NORMAL_OPERATION = "NORMAL_OPERATION"
     UNKNOWN = "UNKNOWN"
+
+
+class TelemetryIngestResponse(BaseModel):
+    """
+    Response model returned by POST /ingest acknowledging valid ingestion.
+    Enriched with recommended safety state and audible buzzer indicator advice.
+    """
+    status: str = Field(default="accepted", description="Status indicator ('accepted')")
+    message: str = Field(
+        default="Telemetry frame ingested and normalized successfully",
+        description="Human-readable processing confirmation"
+    )
+    ingested_at: str = Field(description="Server UTC timestamp when payload was received")
+    data: NormalizedTelemetryFrame = Field(description="Normalized accepted payload")
+    recommended_state: RecommendedMachineState = Field(
+        default=RecommendedMachineState.NORMAL_OPERATION,
+        description="Software safety recommendation (NORMAL_OPERATION, INVESTIGATION_RECOMMENDED, STOP_RECOMMENDED)"
+    )
+    buzzer_recommended: bool = Field(
+        default=False,
+        description="True if an active safety hazard requires the audible warning buzzer / alarm indicator"
+    )
 
 
 class SafetyViolation(BaseModel):

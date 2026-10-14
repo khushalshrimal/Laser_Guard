@@ -165,3 +165,35 @@ export async function stopCamera(): Promise<import('../types/telemetry').CameraS
   return response.json();
 }
 
+export async function updateCameraZone3d(
+  zone3d: import('../types/telemetry').Zone3dConfig
+): Promise<import('../types/telemetry').CameraStatusResponse> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/camera/zone3d`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(zone3d),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to update 3D monitoring zone: HTTP ${response.status} - ${errText}`);
+  }
+  return response.json();
+}
+
+export async function resetCameraZone3d(): Promise<import('../types/telemetry').CameraStatusResponse> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/camera/zone3d/reset`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to reset 3D monitoring zone: HTTP ${response.status} - ${errText}`);
+  }
+  return response.json();
+}
+

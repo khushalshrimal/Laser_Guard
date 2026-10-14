@@ -4,6 +4,7 @@ FastAPI Backend Entry Point, Telemetry Ingestion API, Device Health Registry,
 Safety Rules Engine, Blackbox Event Store, and WebSocket Live Updates
 """
 
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -20,6 +21,8 @@ from app.schemas import (
     SystemSafetyResponse,
     EventHistoryResponse,
     SafetySeverity,
+    RecommendedMachineState,
+    TelemetrySource,
     SafetyThresholdsConfig,
     normalize_to_utc_iso,
     CANONICAL_DEVICE_ID,
@@ -33,6 +36,7 @@ from app.camera_service import (
     CameraStatusResponse,
     CameraStartRequest,
     RoiConfig,
+    Zone3dConfig,
     get_camera_service,
 )
 from app.camera_safety_bridge import (
@@ -119,6 +123,7 @@ def read_root() -> Dict[str, Any]:
         "camera_start_endpoint": "/api/camera/start",
         "camera_stop_endpoint": "/api/camera/stop",
         "camera_stream_endpoint": "/api/camera/stream",
+        "camera_zone3d_endpoint": "/api/camera/zone3d",
         "websocket_endpoint": "/ws/status",
         "status": "online",
     }
@@ -150,6 +155,7 @@ def get_health() -> Dict[str, Any]:
 )
 async def ingest_telemetry(
     payload: TelemetryPayload,
+    force: bool = False,
     registry: DeviceRegistry = Depends(get_device_registry),
     ws_manager: WebSocketManager = Depends(get_ws_manager),
     safety_engine: SafetyEngine = Depends(get_safety_engine),
@@ -160,15 +166,31 @@ async def ingest_telemetry(
 
     - Validates incoming payload against strict LaserGuard telemetry contract.
     - Rejects uncalibrated extra fields, invalid types, and out-of-range sensor values (HTTP 422).
+    - Source arbitration: Blocks SIMULATOR frames from overwriting actively connected HARDWARE (HTTP 409).
     - Normalizes timestamps to standard ISO 8601 UTC representation.
     - Updates in-memory device registry with latest valid frame and server receive timestamp.
     - Evaluates safety rules and logs meaningful state transitions to the persistent SQLite blackbox.
     - Publishes updated snapshot to WebSocket clients (/ws/status).
-    - Returns ingestion acknowledgement along with normalized data frame.
+    - Returns ingestion acknowledgement along with recommended state and buzzer advice.
     """
     server_time = datetime.now(timezone.utc)
     ingested_at = normalize_to_utc_iso(server_time)
     normalized_timestamp = normalize_to_utc_iso(payload.timestamp)
+
+    # Source arbitration: prevent simulator from overwriting active hardware demo
+    hardware_priority = os.getenv("HARDWARE_PRIORITY_ENABLED", "true").lower() in ("true", "1", "yes")
+    if hardware_priority and payload.source == TelemetrySource.SIMULATOR and not force:
+        if registry.is_hardware_active(now=server_time):
+            dev_status = registry.get_device_status(CANONICAL_DEVICE_ID, now=server_time)
+            elapsed = dev_status.seconds_since_last_seen if dev_status else 0.0
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Simulator telemetry rejected: Physical HARDWARE is actively connected and reporting "
+                    f"(ONLINE, last seen {elapsed:.1f}s ago). Wait for hardware telemetry to go STALE "
+                    f"(>{registry.stale_threshold}s) before simulating, or pass force=true."
+                ),
+            )
 
     readings = payload.readings if payload.readings is not None else SensorReadings()
 
@@ -185,9 +207,18 @@ async def ingest_telemetry(
 
     # 2. Evaluate real-time safety for the authoritative machine
     dev_status = registry.get_device_status(CANONICAL_DEVICE_ID, now=server_time)
+    recommended_state = RecommendedMachineState.NORMAL_OPERATION
+    buzzer_recommended = False
     if dev_status:
         dev_safety = safety_engine.evaluate_device(dev_status, evaluated_at=server_time)
         dev_status.safety = dev_safety
+        recommended_state = dev_safety.recommended_state
+        buzzer_recommended = (dev_safety.overall_severity == SafetySeverity.CRITICAL) or (
+            dev_safety.overall_severity == SafetySeverity.WARNING and any(
+                v.rule_id in ("RULE_HIGH_TEMPERATURE", "RULE_ELEVATED_SMOKE", "RULE_PERIMETER_INTRUSION")
+                for v in dev_safety.violations
+            )
+        )
 
         # 3. Record state transitions in SQLite blackbox (if meaningful transition occurred)
         try:
@@ -215,6 +246,8 @@ async def ingest_telemetry(
         message="Telemetry frame ingested and normalized successfully",
         ingested_at=ingested_at,
         data=normalized_frame,
+        recommended_state=recommended_state,
+        buzzer_recommended=buzzer_recommended,
     )
 
 
@@ -387,7 +420,10 @@ def start_camera(
     device_index = req.device_index if req else None
     target_fps = req.target_fps if req else None
     roi = req.roi if req else None
-    return camera_service.start(device_index=device_index, target_fps=target_fps, roi=roi)
+    zone_3d = req.zone_3d if req else None
+    return camera_service.start(
+        device_index=device_index, target_fps=target_fps, roi=roi, zone_3d=zone_3d
+    )
 
 
 @app.post(
@@ -403,6 +439,38 @@ def stop_camera(
     Gracefully stop the camera worker thread and release hardware capture devices.
     """
     return camera_service.stop()
+
+
+@app.post(
+    "/api/camera/zone3d",
+    response_model=CameraStatusResponse,
+    tags=["Camera Vision"],
+    summary="Update experimental 3D monitoring zone configuration",
+)
+def update_camera_zone_3d(
+    zone_3d: Zone3dConfig,
+    camera_service: CameraService = Depends(get_camera_service),
+) -> CameraStatusResponse:
+    """
+    Update 3D monitoring zone boundaries at runtime.
+    Validates boundary intervals [min < max] and value bounds.
+    """
+    return camera_service.update_zone_3d(zone_3d)
+
+
+@app.post(
+    "/api/camera/zone3d/reset",
+    response_model=CameraStatusResponse,
+    tags=["Camera Vision"],
+    summary="Reset 3D monitoring zone configuration to defaults",
+)
+def reset_camera_zone_3d(
+    camera_service: CameraService = Depends(get_camera_service),
+) -> CameraStatusResponse:
+    """
+    Reset 3D monitoring zone boundaries to factory default values.
+    """
+    return camera_service.reset_zone_3d()
 
 
 @app.get(

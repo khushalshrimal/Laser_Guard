@@ -88,7 +88,7 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
             "device_id": "sim-unit-2",
             "readings": {"temperature_c": 21.0},
         }
-        self.client.post("/ingest", json=payload_sim)
+        self.client.post("/ingest?force=true", json=payload_sim)
         res_sim = self.client.get("/api/status").json()
         self.assertEqual(res_sim["device_count"], 1)
         self.assertEqual(res_sim["devices"][0]["source"], "SIMULATOR")
@@ -242,7 +242,7 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
         self.assertEqual(status1["devices"][0]["device_id"], "laser-cutter-01")
 
         # Ingest subsequent frame with device_id="cutter-beta"
-        res2 = self.client.post("/ingest", json={
+        res2 = self.client.post("/ingest?force=true", json={
             "source": "SIMULATOR",
             "device_id": "cutter-beta",
             "readings": {"temperature_c": 31.0, "smoke_level": 9.5},
@@ -274,7 +274,7 @@ class TestDeviceHealthAndStatus(unittest.TestCase):
             self.assertEqual(initial["data"]["devices"][0]["device_id"], "laser-cutter-01")
 
             # Post frame with another arbitrary ID
-            self.client.post("/ingest", json={
+            self.client.post("/ingest?force=true", json={
                 "source": "SIMULATOR",
                 "device_id": "cutter-delta",
                 "readings": {"temperature_c": 28.0},

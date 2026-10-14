@@ -136,6 +136,16 @@ export interface RoiConfig {
   y_max: number;
 }
 
+export interface Zone3dConfig {
+  enabled: boolean;
+  x_min: number;
+  x_max: number;
+  y_min: number;
+  y_max: number;
+  z_min: number;
+  z_max: number;
+}
+
 export interface HandLandmark {
   x: number;
   y: number;
@@ -155,6 +165,8 @@ export interface HandDetection {
   landmarks?: HandLandmark[];
   bbox: HandBBox;
   in_danger_zone: boolean;
+  in_danger_zone_3d?: boolean;
+  tracking_status?: string;
 }
 
 export interface CameraDetectionResult {
@@ -162,6 +174,7 @@ export interface CameraDetectionResult {
   hand_count: number;
   hands: HandDetection[];
   danger_zone_breached: boolean;
+  danger_zone_3d_breached?: boolean;
   timestamp: string;
 }
 
@@ -171,6 +184,7 @@ export interface CameraStatusResponse {
   target_fps: number;
   actual_fps: number;
   roi: RoiConfig;
+  zone_3d?: Zone3dConfig;
   error_message?: string | null;
   latest_detection?: CameraDetectionResult | null;
   available: boolean;

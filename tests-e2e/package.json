@@ -1,0 +1,23 @@
+{
+  "name": "tests-e2e",
+  "version": "1.0.0",
+  "description": "Isolated Playwright E2E test suite for LaserGuard AI",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report"
+  },
+  "keywords": [
+    "playwright",
+    "e2e",
+    "testing",
+    "laserguard"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}

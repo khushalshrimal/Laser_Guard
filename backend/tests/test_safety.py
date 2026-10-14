@@ -288,9 +288,9 @@ class TestSafetyRulesEngine(unittest.TestCase):
             },
         )
 
-        # Ingest SIMULATOR device with nominal readings
+        # Ingest SIMULATOR device with nominal readings (force override)
         self.client.post(
-            "/ingest",
+            "/ingest?force=true",
             json={
                 "source": "SIMULATOR",
                 "device_id": "sim-safety-nominal",

@@ -75,6 +75,32 @@ class DeviceRegistry:
         with self._lock:
             self._stale_threshold_seconds = threshold
 
+    def is_hardware_active(
+        self,
+        now: Optional[datetime] = None,
+        threshold: Optional[float] = None,
+    ) -> bool:
+        """
+        Check if physical HARDWARE is currently registered and actively ONLINE (not stale).
+        Returns False if no device is registered, if the active source is SIMULATOR,
+        or if HARDWARE has exceeded the stale threshold.
+        """
+        effective_threshold = threshold if threshold is not None else self.stale_threshold
+        if now is None:
+            now = datetime.now(timezone.utc)
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
+
+        with self._lock:
+            if not self._machine:
+                return False
+            if self._machine.source != TelemetrySource.HARDWARE:
+                return False
+            elapsed = max(0.0, (now - self._machine.last_seen_at).total_seconds())
+            return elapsed <= effective_threshold
+
     def update_camera_intrusion(self, detected: Optional[bool]) -> None:
         """
         Update camera intrusion status on the canonical machine's latest readings

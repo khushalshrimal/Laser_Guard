@@ -90,9 +90,9 @@ class TestWebSocketTelemetryUpdates(unittest.TestCase):
             self.assertEqual(dev_hw["device_id"], CANONICAL_DEVICE_ID)
             self.assertEqual(dev_hw["source"], "HARDWARE")
 
-            # Send SIMULATOR
+            # Send SIMULATOR (force override while hardware is online)
             self.client.post(
-                "/ingest",
+                "/ingest?force=true",
                 json={
                     "source": "SIMULATOR",
                     "device_id": "sim-soft",

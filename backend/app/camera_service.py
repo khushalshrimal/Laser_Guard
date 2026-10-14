@@ -5,6 +5,7 @@ hand tracking and danger-zone intrusion detection.
 """
 
 import logging
+import math
 import os
 import threading
 import time
@@ -49,6 +50,16 @@ except ImportError:
     MEDIAPIPE_AVAILABLE = False
 
 
+HAND_SKELETON_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),        # Thumb
+    (0, 5), (5, 6), (6, 7), (7, 8),        # Index
+    (5, 9), (9, 10), (10, 11), (11, 12),   # Middle
+    (9, 13), (13, 14), (14, 15), (15, 16), # Ring
+    (13, 17), (17, 18), (18, 19), (19, 20),# Pinky
+    (0, 17),                               # Wrist to pinky base
+]
+
+
 class CameraLifecycleState(str, Enum):
     """Lifecycle states of the camera service."""
     STOPPED = "STOPPED"
@@ -63,6 +74,30 @@ class DetectionStatus(str, Enum):
     HAND_DETECTED = "HAND_DETECTED"
     DANGER_ZONE_BREACH = "DANGER_ZONE_BREACH"
     CAMERA_OFFLINE = "CAMERA_OFFLINE"
+
+
+def sanitize_coord(val: Any, default: float = 0.0) -> float:
+    """Safely convert coordinate to finite float, fallback on non-finite/invalid."""
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return round(f, 5)
+    except (TypeError, ValueError):
+        return default
+
+
+def sanitize_opt_coord(val: Any) -> Optional[float]:
+    """Safely convert optional coordinate to finite float or None."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return round(f, 5)
+    except (TypeError, ValueError):
+        return None
 
 
 class RoiConfig(BaseModel):
@@ -83,11 +118,46 @@ class RoiConfig(BaseModel):
         return self
 
 
+class Zone3dConfig(BaseModel):
+    """
+    Configurable 3D monitoring zone with normalized X/Y and estimated relative Z depth.
+    Notice: Estimated relative depth from a single webcam is not calibrated physical measurement (mm/cm).
+    """
+    enabled: bool = Field(default=True, description="Enable 3D monitoring zone")
+    x_min: float = Field(default=0.2, ge=0.0, le=1.0, description="Left boundary [0.0, 1.0]")
+    x_max: float = Field(default=0.8, ge=0.0, le=1.0, description="Right boundary [0.0, 1.0]")
+    y_min: float = Field(default=0.2, ge=0.0, le=1.0, description="Top boundary [0.0, 1.0]")
+    y_max: float = Field(default=0.8, ge=0.0, le=1.0, description="Bottom boundary [0.0, 1.0]")
+    z_min: float = Field(default=-0.3, ge=-1.0, le=1.0, description="Estimated relative depth min [-1.0, 1.0]")
+    z_max: float = Field(default=0.3, ge=-1.0, le=1.0, description="Estimated relative depth max [-1.0, 1.0]")
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "Zone3dConfig":
+        if self.x_min >= self.x_max:
+            raise ValueError(f"x_min ({self.x_min}) must be strictly less than x_max ({self.x_max})")
+        if self.y_min >= self.y_max:
+            raise ValueError(f"y_min ({self.y_min}) must be strictly less than y_max ({self.y_max})")
+        if self.z_min >= self.z_max:
+            raise ValueError(f"z_min ({self.z_min}) must be strictly less than z_max ({self.z_max})")
+        return self
+
+
 class HandLandmark(BaseModel):
     """Normalized 3D landmark coordinate for a detected hand keypoint."""
     x: float
     y: float
     z: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_coordinates(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return {
+                "x": sanitize_coord(data.get("x", 0.0)),
+                "y": sanitize_coord(data.get("y", 0.0)),
+                "z": sanitize_opt_coord(data.get("z")),
+            }
+        return data
 
 
 class HandBBox(BaseModel):
@@ -105,6 +175,8 @@ class HandDetection(BaseModel):
     landmarks: List[HandLandmark] = Field(default_factory=list)
     bbox: HandBBox
     in_danger_zone: bool = False
+    in_danger_zone_3d: bool = False
+    tracking_status: str = "TRACKED"
 
 
 class CameraDetectionResult(BaseModel):
@@ -113,6 +185,7 @@ class CameraDetectionResult(BaseModel):
     hand_count: int = 0
     hands: List[HandDetection] = Field(default_factory=list)
     danger_zone_breached: bool = False
+    danger_zone_3d_breached: bool = False
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -125,6 +198,7 @@ class CameraStatusResponse(BaseModel):
     target_fps: float = 10.0
     actual_fps: float = 0.0
     roi: RoiConfig = Field(default_factory=RoiConfig)
+    zone_3d: Zone3dConfig = Field(default_factory=Zone3dConfig)
     error_message: Optional[str] = None
     latest_detection: Optional[CameraDetectionResult] = None
     available: bool = True
@@ -135,6 +209,7 @@ class CameraStartRequest(BaseModel):
     device_index: Optional[int] = Field(default=None, ge=0, description="Webcam device index")
     target_fps: Optional[float] = Field(default=None, gt=0.0, le=60.0, description="Target capture FPS")
     roi: Optional[RoiConfig] = Field(default=None, description="Danger zone ROI configuration")
+    zone_3d: Optional[Zone3dConfig] = Field(default=None, description="Configurable 3D monitoring zone")
 
 
 def check_point_in_roi(x: float, y: float, roi: RoiConfig) -> bool:
@@ -147,6 +222,25 @@ def check_bbox_intersects_roi(bbox: HandBBox, roi: RoiConfig) -> bool:
     overlap_x = max(0.0, min(bbox.x_max, roi.x_max) - max(bbox.x_min, roi.x_min))
     overlap_y = max(0.0, min(bbox.y_max, roi.y_max) - max(bbox.y_min, roi.y_min))
     return (overlap_x > 0.0) and (overlap_y > 0.0)
+
+
+def check_point_in_zone_3d(x: float, y: float, z: Optional[float], zone: Zone3dConfig) -> bool:
+    """Check if normalized 3D point lies inside the 3D monitoring zone."""
+    if not zone.enabled:
+        return False
+    in_xy = (zone.x_min <= x <= zone.x_max) and (zone.y_min <= y <= zone.y_max)
+    if not in_xy:
+        return False
+    if z is None:
+        return in_xy
+    return zone.z_min <= z <= zone.z_max
+
+
+def check_hand_in_zone_3d(landmarks: List[HandLandmark], zone: Zone3dConfig) -> bool:
+    """Check if any landmark of the hand falls inside the 3D monitoring zone."""
+    if not zone.enabled or not landmarks:
+        return False
+    return any(check_point_in_zone_3d(lm.x, lm.y, lm.z, zone) for lm in landmarks)
 
 
 def get_default_camera_index() -> int:
@@ -176,6 +270,7 @@ class CameraService:
         device_index: Optional[int] = None,
         target_fps: float = 10.0,
         roi: Optional[RoiConfig] = None,
+        zone_3d: Optional[Zone3dConfig] = None,
         model_path: Optional[str] = None,
     ):
         self._device_index = (
@@ -183,6 +278,7 @@ class CameraService:
         )
         self._target_fps = target_fps
         self._roi = roi or RoiConfig()
+        self._zone_3d = zone_3d or Zone3dConfig()
         self._model_path = model_path or self._resolve_default_model_path()
 
         self._state = CameraLifecycleState.STOPPED
@@ -225,6 +321,7 @@ class CameraService:
         device_index: Optional[int] = None,
         target_fps: Optional[float] = None,
         roi: Optional[RoiConfig] = None,
+        zone_3d: Optional[Zone3dConfig] = None,
     ) -> CameraStatusResponse:
         """
         Start the background camera capture thread.
@@ -249,6 +346,8 @@ class CameraService:
                 self._target_fps = target_fps
             if roi is not None:
                 self._roi = roi
+            if zone_3d is not None:
+                self._zone_3d = zone_3d
 
             self._state = CameraLifecycleState.STARTING
             self._error_message = None
@@ -347,6 +446,18 @@ class CameraService:
             self._roi = roi
             return self._get_status_unlocked()
 
+    def update_zone_3d(self, zone_3d: Zone3dConfig) -> CameraStatusResponse:
+        """Update 3D monitoring zone configuration at runtime."""
+        with self._lock:
+            self._zone_3d = zone_3d
+            return self._get_status_unlocked()
+
+    def reset_zone_3d(self) -> CameraStatusResponse:
+        """Reset 3D monitoring zone configuration to default values."""
+        with self._lock:
+            self._zone_3d = Zone3dConfig()
+            return self._get_status_unlocked()
+
     def _get_status_unlocked(self) -> CameraStatusResponse:
         """Internal helper to construct status while caller already holds self._lock."""
         return CameraStatusResponse(
@@ -355,6 +466,7 @@ class CameraService:
             target_fps=self._target_fps,
             actual_fps=round(self._actual_fps, 2),
             roi=self._roi,
+            zone_3d=self._zone_3d,
             error_message=self._error_message,
             latest_detection=self._latest_detection,
             available=self.is_available,
@@ -413,13 +525,16 @@ class CameraService:
         raw_results: Any,
         detector_type: str,
         roi: RoiConfig,
+        zone_3d: Optional[Zone3dConfig] = None,
     ) -> CameraDetectionResult:
         """
         Transform detection results from either Tasks or Solutions API into structured
-        CameraDetectionResult and evaluate danger-zone ROI intersections.
+        CameraDetectionResult, evaluate 2D danger-zone ROI intersections and 3D monitoring zone.
         """
+        zone_3d = zone_3d or Zone3dConfig()
         hands_list: List[HandDetection] = []
         danger_zone_breached = False
+        danger_zone_3d_breached = False
 
         if raw_results is not None:
             # 1. MediaPipe Tasks API format (HandLandmarkerResult)
@@ -434,10 +549,16 @@ class CameraService:
                     landmark_in_danger = False
 
                     for lm in hand_lms:
-                        landmarks.append(HandLandmark(x=lm.x, y=lm.y, z=getattr(lm, "z", None)))
-                        x_coords.append(lm.x)
-                        y_coords.append(lm.y)
-                        if check_point_in_roi(lm.x, lm.y, roi):
+                        raw_x = getattr(lm, "x", 0.0)
+                        raw_y = getattr(lm, "y", 0.0)
+                        raw_z = getattr(lm, "z", None)
+                        clean_x = sanitize_coord(raw_x)
+                        clean_y = sanitize_coord(raw_y)
+                        clean_z = sanitize_opt_coord(raw_z)
+                        landmarks.append(HandLandmark(x=clean_x, y=clean_y, z=clean_z))
+                        x_coords.append(clean_x)
+                        y_coords.append(clean_y)
+                        if check_point_in_roi(clean_x, clean_y, roi):
                             landmark_in_danger = True
 
                     hx_min = min(x_coords) if x_coords else 0.0
@@ -454,9 +575,12 @@ class CameraService:
 
                     bbox_in_danger = check_bbox_intersects_roi(bbox, roi)
                     is_hand_in_danger = landmark_in_danger or bbox_in_danger
+                    is_hand_in_zone_3d = check_hand_in_zone_3d(landmarks, zone_3d)
 
                     if is_hand_in_danger:
                         danger_zone_breached = True
+                    if is_hand_in_zone_3d:
+                        danger_zone_3d_breached = True
 
                     label = None
                     score = None
@@ -475,6 +599,8 @@ class CameraService:
                             landmarks=landmarks,
                             bbox=bbox,
                             in_danger_zone=is_hand_in_danger,
+                            in_danger_zone_3d=is_hand_in_zone_3d,
+                            tracking_status="TRACKED" if landmarks else "NO_LANDMARKS",
                         )
                     )
 
@@ -491,10 +617,16 @@ class CameraService:
 
                     landmark_iterable = getattr(hand_landmarks, "landmark", hand_landmarks)
                     for lm in landmark_iterable:
-                        landmarks.append(HandLandmark(x=lm.x, y=lm.y, z=getattr(lm, "z", None)))
-                        x_coords.append(lm.x)
-                        y_coords.append(lm.y)
-                        if check_point_in_roi(lm.x, lm.y, roi):
+                        raw_x = getattr(lm, "x", 0.0)
+                        raw_y = getattr(lm, "y", 0.0)
+                        raw_z = getattr(lm, "z", None)
+                        clean_x = sanitize_coord(raw_x)
+                        clean_y = sanitize_coord(raw_y)
+                        clean_z = sanitize_opt_coord(raw_z)
+                        landmarks.append(HandLandmark(x=clean_x, y=clean_y, z=clean_z))
+                        x_coords.append(clean_x)
+                        y_coords.append(clean_y)
+                        if check_point_in_roi(clean_x, clean_y, roi):
                             landmark_in_danger = True
 
                     hx_min = min(x_coords) if x_coords else 0.0
@@ -511,9 +643,12 @@ class CameraService:
 
                     bbox_in_danger = check_bbox_intersects_roi(bbox, roi)
                     is_hand_in_danger = landmark_in_danger or bbox_in_danger
+                    is_hand_in_zone_3d = check_hand_in_zone_3d(landmarks, zone_3d)
 
                     if is_hand_in_danger:
                         danger_zone_breached = True
+                    if is_hand_in_zone_3d:
+                        danger_zone_3d_breached = True
 
                     label = None
                     score = None
@@ -532,6 +667,8 @@ class CameraService:
                             landmarks=landmarks,
                             bbox=bbox,
                             in_danger_zone=is_hand_in_danger,
+                            in_danger_zone_3d=is_hand_in_zone_3d,
+                            tracking_status="TRACKED" if landmarks else "NO_LANDMARKS",
                         )
                     )
 
@@ -548,6 +685,7 @@ class CameraService:
             hand_count=hand_count,
             hands=hands_list,
             danger_zone_breached=danger_zone_breached,
+            danger_zone_3d_breached=danger_zone_3d_breached,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -568,9 +706,19 @@ class CameraService:
                 logger.error(self._error_message)
                 return
 
-            # 2. Open OpenCV video capture
+            # 2. Open OpenCV video capture (prefer DSHOW on Windows for fast startup)
             try:
-                cap = cv2.VideoCapture(self._device_index)
+                cap = None
+                if os.name == "nt" and cv2 is not None and hasattr(cv2, "CAP_DSHOW"):
+                    try:
+                        cap = cv2.VideoCapture(self._device_index, cv2.CAP_DSHOW)
+                        if not cap or not cap.isOpened():
+                            cap = None
+                    except Exception:
+                        cap = None
+                if cap is None:
+                    cap = cv2.VideoCapture(self._device_index)
+
                 if not cap or not cap.isOpened():
                     with self._lock:
                         self._state = CameraLifecycleState.ERROR
@@ -618,8 +766,11 @@ class CameraService:
 
                     with self._lock:
                         current_roi = self._roi
+                        current_zone_3d = self._zone_3d
 
-                    detection_result = self._process_frame_detections(raw_results, detector_type, current_roi)
+                    detection_result = self._process_frame_detections(
+                        raw_results, detector_type, current_roi, current_zone_3d
+                    )
 
                     # Update rolling FPS
                     t_end = time.time()
@@ -648,22 +799,31 @@ class CameraService:
                     roi_label = "DANGER ZONE: BREACHED" if detection_result.danger_zone_breached else "EXCLUSION ZONE: CLEAR"
                     cv2.putText(display_frame, roi_label, (rx1 + 6, max(20, ry1 + 22)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, roi_color, 2)
 
-                    # 2. Draw detected hand bounding boxes and landmarks
+                    # 2. Draw detected hand skeleton lines, joints, and bounding boxes
                     for hand in detection_result.hands:
                         hx1 = int(hand.bbox.x_min * w)
                         hy1 = int(hand.bbox.y_min * h)
                         hx2 = int(hand.bbox.x_max * w)
                         hy2 = int(hand.bbox.y_max * h)
                         hand_color = (0, 0, 255) if hand.in_danger_zone else (0, 255, 0)
-                        cv2.rectangle(display_frame, (hx1, hy1), (hx2, hy2), hand_color, 2)
+                        cv2.rectangle(display_frame, (hx1, hy1), (hx2, hy2), hand_color, 1)
 
                         hand_tag = f"{hand.label or 'Hand'} {int((hand.score or 0.0) * 100)}%"
                         cv2.putText(display_frame, hand_tag, (hx1, max(15, hy1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, hand_color, 1)
 
-                        for lm in hand.landmarks:
-                            lx = int(lm.x * w)
-                            ly = int(lm.y * h)
-                            cv2.circle(display_frame, (lx, ly), 3, (0, 255, 255), -1)
+                        pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand.landmarks]
+
+                        # Draw connecting bones
+                        bone_color = (0, 0, 255) if hand.in_danger_zone else (255, 200, 0)  # Cyan-blue BGR
+                        for j1, j2 in HAND_SKELETON_CONNECTIONS:
+                            if j1 < len(pts) and j2 < len(pts):
+                                cv2.line(display_frame, pts[j1], pts[j2], bone_color, 2, cv2.LINE_AA)
+
+                        # Draw joint markers
+                        for pt in pts:
+                            joint_color = (0, 0, 255) if hand.in_danger_zone else (0, 255, 255)
+                            cv2.circle(display_frame, pt, 4, joint_color, -1, cv2.LINE_AA)
+                            cv2.circle(display_frame, pt, 5, (255, 255, 255), 1, cv2.LINE_AA)
 
                     ret_enc, jpeg = cv2.imencode('.jpg', display_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                     jpeg_bytes = jpeg.tobytes() if ret_enc else None

@@ -167,11 +167,20 @@ def main():
         default=1.0,
         help="Seconds between consecutive frames in loop mode (default: 1.0)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force simulator ingestion even if physical HARDWARE is actively connected (source arbitration override)",
+    )
 
     args = parser.parse_args()
 
+    target_url = args.url
+    if args.force:
+        target_url = target_url + ("&" if "?" in target_url else "?") + "force=true"
+
     print(f"[LaserGuard AI Simulator] Initialized.")
-    print(f"  Target: {args.url}")
+    print(f"  Target: {target_url}")
     print(f"  Source: SIMULATOR (Enforced)")
     print(f"  Device: {args.device_id}")
     print(f"  Mode:   {args.mode.upper()}")
@@ -181,7 +190,7 @@ def main():
     try:
         while True:
             payload = generate_telemetry_payload(mode=args.mode, device_id=args.device_id)
-            result = send_telemetry(payload, url=args.url)
+            result = send_telemetry(payload, url=target_url)
 
             if result["error"]:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Frame #{sent_count + 1} FAILED: {result['error']}")

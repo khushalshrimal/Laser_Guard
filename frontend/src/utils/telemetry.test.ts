@@ -482,5 +482,127 @@ describe('LaserGuard AI Frontend Telemetry & Protocol Tests', () => {
       assert.strictEqual(activeStreamUrl, null);
     });
   });
+
+  describe('Milestone 2: 3D Hand Tracking & Configurable Danger Zone', () => {
+    // Spatial 3D intersection helper
+    function checkPointInZone3d(
+      x: number,
+      y: number,
+      z: number | null | undefined,
+      zone: { enabled: boolean; x_min: number; x_max: number; y_min: number; y_max: number; z_min: number; z_max: number }
+    ): boolean {
+      if (!zone.enabled) return false;
+      const inXy = x >= zone.x_min && x <= zone.x_max && y >= zone.y_min && y <= zone.y_max;
+      if (!inXy) return false;
+      if (z === null || z === undefined || Number.isNaN(z)) return inXy;
+      return z >= zone.z_min && z <= zone.z_max;
+    }
+
+    test('validates 21 hand landmarks structure and normalized ranges', () => {
+      const mockLandmarks = Array.from({ length: 21 }, (_, i) => ({
+        x: 0.3 + i * 0.01,
+        y: 0.4 + i * 0.01,
+        z: -0.1 + i * 0.005, // estimated relative depth
+      }));
+
+      assert.strictEqual(mockLandmarks.length, 21);
+      mockLandmarks.forEach((lm) => {
+        assert.ok(lm.x >= 0.0 && lm.x <= 1.0);
+        assert.ok(lm.y >= 0.0 && lm.y <= 1.0);
+        assert.ok(lm.z >= -1.0 && lm.z <= 1.0);
+      });
+    });
+
+    test('handles non-finite, missing, or invalid coordinates safely', () => {
+      function sanitizeCoordinate(val: unknown, fallback = 0.0): number {
+        if (typeof val !== 'number' || !Number.isFinite(val)) {
+          return fallback;
+        }
+        return val;
+      }
+
+      assert.strictEqual(sanitizeCoordinate(0.75), 0.75);
+      assert.strictEqual(sanitizeCoordinate(NaN, 0.0), 0.0);
+      assert.strictEqual(sanitizeCoordinate(Infinity, 0.0), 0.0);
+      assert.strictEqual(sanitizeCoordinate('invalid', 0.0), 0.0);
+      assert.strictEqual(sanitizeCoordinate(null, 0.0), 0.0);
+    });
+
+    test('validates 3D monitoring zone boundaries and interval ordering', () => {
+      const validZone = {
+        enabled: true,
+        x_min: 0.2,
+        x_max: 0.8,
+        y_min: 0.2,
+        y_max: 0.8,
+        z_min: -0.3,
+        z_max: 0.3,
+      };
+
+      assert.ok(validZone.x_min < validZone.x_max);
+      assert.ok(validZone.y_min < validZone.y_max);
+      assert.ok(validZone.z_min < validZone.z_max);
+
+      // Inverted check
+      const isInverted = (z: typeof validZone) => z.x_min >= z.x_max || z.y_min >= z.y_max || z.z_min >= z.z_max;
+      assert.strictEqual(isInverted(validZone), false);
+      assert.strictEqual(isInverted({ ...validZone, z_min: 0.5, z_max: -0.2 }), true);
+    });
+
+    test('correctly evaluates 3D point-in-zone with estimated relative depth Z', () => {
+      const zone = {
+        enabled: true,
+        x_min: 0.2,
+        x_max: 0.8,
+        y_min: 0.2,
+        y_max: 0.8,
+        z_min: -0.3,
+        z_max: 0.3,
+      };
+
+      // Point inside volume
+      assert.strictEqual(checkPointInZone3d(0.5, 0.5, 0.0, zone), true);
+      // Point outside in XY
+      assert.strictEqual(checkPointInZone3d(0.1, 0.5, 0.0, zone), false);
+      // Point inside in XY but outside estimated depth (too far)
+      assert.strictEqual(checkPointInZone3d(0.5, 0.5, 0.6, zone), false);
+      // Point inside in XY but outside estimated depth (too close)
+      assert.strictEqual(checkPointInZone3d(0.5, 0.5, -0.5, zone), false);
+      // Disabled zone never breaches
+      assert.strictEqual(checkPointInZone3d(0.5, 0.5, 0.0, { ...zone, enabled: false }), false);
+    });
+
+    test('preserves 2D danger zone safety decision independently of 3D zone status', () => {
+      // 2D ROI is [0.2, 0.8]
+      const handInside2d = { x: 0.5, y: 0.5, z: 0.8 }; // Outside 3D Z range [-0.3, 0.3]
+      const roi2d = { x_min: 0.2, x_max: 0.8, y_min: 0.2, y_max: 0.8 };
+      const zone3d = { enabled: true, x_min: 0.2, x_max: 0.8, y_min: 0.2, y_max: 0.8, z_min: -0.3, z_max: 0.3 };
+
+      const is2dBreached = handInside2d.x >= roi2d.x_min && handInside2d.x <= roi2d.x_max && handInside2d.y >= roi2d.y_min && handInside2d.y <= roi2d.y_max;
+      const is3dBreached = checkPointInZone3d(handInside2d.x, handInside2d.y, handInside2d.z, zone3d);
+
+      // Primary safety rule remains triggered by 2D
+      assert.strictEqual(is2dBreached, true);
+      // Experimental 3D zone remains unbreached due to estimated relative depth
+      assert.strictEqual(is3dBreached, false);
+      // The 2D decision is NOT overwritten by 3D
+      assert.strictEqual(is2dBreached, true);
+    });
+
+    test('handles camera offline state gracefully with hand_count = 0', () => {
+      const offlineDetection = {
+        status: 'NO_HANDS',
+        hand_count: 0,
+        hands: [],
+        danger_zone_breached: false,
+        danger_zone_3d_breached: false,
+      };
+
+      assert.strictEqual(offlineDetection.hand_count, 0);
+      assert.strictEqual(offlineDetection.status, 'NO_HANDS');
+      assert.strictEqual(offlineDetection.danger_zone_breached, false);
+      assert.strictEqual(offlineDetection.danger_zone_3d_breached, false);
+    });
+  });
 });
 

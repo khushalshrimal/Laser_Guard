@@ -165,6 +165,19 @@ class SystemStatusResponse(BaseModel):
     )
 
 
+class WebSocketMessage(BaseModel):
+    """
+    Standard envelope format published to connected WebSocket clients at /ws/status.
+    Reuses SystemStatusResponse directly to guarantee a single source of truth.
+    """
+    event: str = Field(
+        description="Event classification: 'status_snapshot' (on connect), 'telemetry_update' (on ingest), or 'stale_transition' (on timeout)"
+    )
+    data: SystemStatusResponse = Field(
+        description="Current system status payload including tracked devices and connectivity health"
+    )
+
+
 def normalize_to_utc_iso(dt: Optional[datetime]) -> str:
     """
     Normalize an optional datetime into a standardized ISO 8601 UTC string.

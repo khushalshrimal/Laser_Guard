@@ -22,14 +22,16 @@ Laser_Guard/
 ├── backend/                      # Python + FastAPI Backend
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── main.py              # FastAPI entry point, CORS, /health, /ingest, /api/status
+│   │   ├── main.py              # FastAPI entry point, CORS, /health, /ingest, /api/status, /ws/status
 │   │   ├── registry.py          # In-memory device registry & stale-data detection
-│   │   └── schemas.py           # Pydantic telemetry contract & normalizers
+│   │   ├── schemas.py           # Pydantic telemetry contract & WebSocket models
+│   │   └── websocket_manager.py # WebSocket client pool, initial snapshot, live broadcast
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_health.py       # Automated unit tests for /health & /
 │   │   ├── test_ingest.py       # Automated unit tests for POST /ingest validation
-│   │   └── test_status.py       # Automated unit tests for device status & stale detection
+│   │   ├── test_status.py       # Automated unit tests for device status & stale detection
+│   │   └── test_websocket.py    # Automated unit tests for WebSocket live stream & stale broadcast
 │   ├── .env.example             # Example environment configuration (includes STALE_THRESHOLD_SECONDS)
 │   ├── requirements.txt         # Pinned backend dependencies
 │   └── .venv/                   # Python virtual environment (ignored by git)
@@ -337,5 +339,85 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/status?device_id=esp32-cutter-
 
 ---
 
+## Live Telemetry Streaming with WebSockets (`/ws/status`)
+
+LaserGuard AI provides a real-time pub-sub stream via FastAPI WebSockets at `/ws/status`.
+
+### Architecture & Pipeline
+1. **Unified Ingestion:** Sensors (`HARDWARE` ESP32 or `SIMULATOR`) send JSON via `POST /ingest`.
+2. **Atomic Registry Update:** Payload is strictly validated and recorded in the in-memory registry.
+3. **Instant Push Distribution:** An updated status snapshot is asynchronously broadcast to all connected WebSocket clients without client polling.
+4. **Resilient Client Management:** Slow, disconnected, or closed sockets are automatically detected and pruned without interrupting broadcasts or crashing HTTP ingestion.
+5. **Accurate Stale Notifications:** The backend includes a background monitor that checks device states against `STALE_THRESHOLD_SECONDS`. If a device goes offline without new packets arriving, an automatic `stale_transition` event is pushed to connected clients.
+6. **No MQTT Broker Required:** Zero external broker overhead.
+
+### WebSocket JSON Message Specification
+
+Every message published by `/ws/status` uses a standardized envelope:
+```json
+{
+  "event": "status_snapshot | telemetry_update | stale_transition | pong",
+  "data": { ... SystemStatusResponse ... }
+}
+```
+
+| Event Type | Trigger | Purpose |
+|---|---|---|
+| `status_snapshot` | Client connects or sends `"refresh"` | Immediate full system state synchronization |
+| `telemetry_update` | Valid frame accepted at `POST /ingest` | Live push of new sensor readings and updated last-seen time |
+| `stale_transition` | Device exceeds `STALE_THRESHOLD_SECONDS` | Instant notification that a device has gone offline |
+| `pong` | Client sends `"ping"` | Keep-alive heartbeat response |
+
+### Example WebSocket Message (`telemetry_update`)
+```json
+{
+  "event": "telemetry_update",
+  "data": {
+    "status": "ok",
+    "server_time": "2026-10-14T11:06:00.123456Z",
+    "stale_threshold_seconds": 10.0,
+    "device_count": 1,
+    "devices": [
+      {
+        "device_id": "esp32-cutter-01",
+        "source": "HARDWARE",
+        "connectivity_state": "ONLINE",
+        "last_seen": "2026-10-14T11:05:59.800000Z",
+        "seconds_since_last_seen": 0.32,
+        "stale_threshold_seconds": 10.0,
+        "latest_readings": {
+          "door_open": false,
+          "flame_detected": false,
+          "smoke_level": 8.5,
+          "temperature_c": 27.3,
+          "machine_enabled": true,
+          "machine_running": true,
+          "radiation_level": 0.02
+        }
+      }
+    ],
+    "disclaimer": "Software connectivity state only. Does not guarantee physical sensor health or hardware interlock engagement."
+  }
+}
+```
+
+### Testing the WebSocket Stream in Windows PowerShell
+Using Python one-liner in the active virtual environment:
+```powershell
+cd c:\Users\khush\OneDrive\Desktop\Laser_Guard\backend
+.\.venv\Scripts\python -c "import asyncio, websockets, json;
+async def listen():
+    async with websockets.connect('ws://127.0.0.1:8000/ws/status') as ws:
+        print('Connected! Waiting for events...')
+        while True:
+            msg = await ws.recv()
+            print('Received event:', json.loads(msg).get('event'))
+asyncio.run(listen())
+"
+```
+
+---
+
 ## License & Team
 LaserGuard AI is created for Hackathon SKIT014.
+

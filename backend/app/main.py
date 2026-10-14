@@ -1,11 +1,12 @@
 """
 LaserGuard AI - Smart Laser-Cutting Machine Safety & Monitoring System
-FastAPI Backend Entry Point, Telemetry Ingestion API, and Device Health Registry
+FastAPI Backend Entry Point, Telemetry Ingestion API, Device Health Registry, and WebSocket Live Updates
 """
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Depends, status
+from fastapi import FastAPI, Depends, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import (
@@ -17,11 +18,28 @@ from app.schemas import (
     normalize_to_utc_iso,
 )
 from app.registry import DeviceRegistry, get_device_registry
+from app.websocket_manager import WebSocketManager, get_ws_manager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifecycle management:
+    Initializes and starts background stale detection monitoring on startup;
+    gracefully terminates tasks on shutdown.
+    """
+    ws_mgr = get_ws_manager()
+    reg = get_device_registry()
+    ws_mgr.start_stale_monitor(reg, interval=2.0)
+    yield
+    await ws_mgr.stop_stale_monitor()
+
 
 app = FastAPI(
     title="LaserGuard AI API",
-    description="Backend API, Telemetry Ingestion, and Device Health Registry for LaserGuard AI Smart Laser-Cutting Machine Safety System",
-    version="0.3.0-device-health",
+    description="Backend API, Telemetry Ingestion, Device Health Registry, and WebSocket Live Stream for LaserGuard AI",
+    version="0.4.0-websocket-telemetry",
+    lifespan=lifespan,
 )
 
 # Enable CORS for local development with frontend
@@ -50,6 +68,7 @@ def read_root() -> Dict[str, Any]:
         "health_check": "/health",
         "ingest_endpoint": "/ingest",
         "status_endpoint": "/api/status",
+        "websocket_endpoint": "/ws/status",
         "status": "online",
     }
 
@@ -63,11 +82,11 @@ def get_health() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "app": "LaserGuard AI",
-        "version": "0.3.0-device-health",
+        "version": "0.4.0-websocket-telemetry",
         "environment": "development",
         "hardware_connected": False,
         "active_source": "NONE",
-        "notice": "Device health registry active. Real-time telemetry ingestion online at POST /ingest and status tracking at GET /api/status. No physical hardware or e-stop actuation attached.",
+        "notice": "WebSocket live stream active at /ws/status. Telemetry ingestion online at POST /ingest and status tracking at GET /api/status. No physical hardware or e-stop actuation attached.",
     }
 
 
@@ -78,9 +97,10 @@ def get_health() -> Dict[str, Any]:
     tags=["Telemetry"],
     summary="Ingest telemetry from ESP32 hardware or simulator",
 )
-def ingest_telemetry(
+async def ingest_telemetry(
     payload: TelemetryPayload,
     registry: DeviceRegistry = Depends(get_device_registry),
+    ws_manager: WebSocketManager = Depends(get_ws_manager),
 ) -> TelemetryIngestResponse:
     """
     Ingest a telemetry frame from either physical HARDWARE (ESP32) or SIMULATOR.
@@ -89,6 +109,7 @@ def ingest_telemetry(
     - Rejects uncalibrated extra fields, invalid types, and out-of-range sensor values (HTTP 422).
     - Normalizes timestamps to standard ISO 8601 UTC representation.
     - Updates in-memory device registry with latest valid frame and server receive timestamp.
+    - Publishes updated status snapshot to all connected WebSocket clients (/ws/status).
     - Returns ingestion acknowledgement along with normalized data frame.
 
     Safety Notice: Persistence and automated interlock decisions will be attached
@@ -107,8 +128,11 @@ def ingest_telemetry(
         readings=readings,
     )
 
-    # Update in-memory device registry with latest valid frame
+    # 1. Update in-memory device registry with latest valid frame
     registry.register_telemetry(normalized_frame, server_received_at=server_time)
+
+    # 2. Asynchronously broadcast status update to connected WebSocket clients
+    await ws_manager.broadcast_status(registry, event="telemetry_update")
 
     return TelemetryIngestResponse(
         status="accepted",
@@ -141,6 +165,37 @@ def get_status(
         threshold=stale_threshold,
         filter_device_id=device_id,
     )
+
+
+@app.websocket("/ws/status")
+async def websocket_status_endpoint(
+    websocket: WebSocket,
+    registry: DeviceRegistry = Depends(get_device_registry),
+    ws_manager: WebSocketManager = Depends(get_ws_manager),
+):
+    """
+    WebSocket endpoint broadcasting real-time system and device status updates.
+
+    - On Connect: Delivers immediate SystemStatusResponse snapshot (event='status_snapshot').
+    - On Telemetry Ingestion: Broadcasts updated system status (event='telemetry_update').
+    - On Stale Timeout: Broadcasts transition when a device goes offline (event='stale_transition').
+    - Client Messages: Accepts 'ping' (replies with 'pong') and 'refresh' (sends fresh snapshot).
+    """
+    await ws_manager.connect(websocket, registry)
+    try:
+        while True:
+            client_msg = await websocket.receive_text()
+            if client_msg == "ping":
+                await websocket.send_json({"event": "pong"})
+            elif client_msg == "refresh":
+                snapshot = registry.get_system_status()
+                await websocket.send_json(
+                    {"event": "status_snapshot", "data": snapshot.model_dump()}
+                )
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(websocket)
+    except Exception:
+        await ws_manager.disconnect(websocket)
 
 
 if __name__ == "__main__":

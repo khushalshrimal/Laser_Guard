@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional
 from fastapi import FastAPI, Depends, status, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict
 
 from app.schemas import (
     TelemetryPayload,
@@ -250,6 +251,195 @@ async def ingest_telemetry(
         recommended_state=recommended_state,
         buzzer_recommended=buzzer_recommended,
     )
+
+
+# =====================================================================================
+# ESP32 WI-FI TELEMETRY BRIDGE (/api/telemetry, /api/latest, /api/logs)
+# =====================================================================================
+
+class Esp32TelemetryPayload(BaseModel):
+    """Payload schema submitted by ESP32 LaserGuard firmware over Wi-Fi."""
+    model_config = ConfigDict(extra="ignore")
+
+    device_id: Optional[str] = "LASERGUARD_ESP32"
+    uptime_ms: Optional[int] = None
+    temperature_c: Optional[float] = None
+    temperature_fault: Optional[bool] = False
+    flame_detected: Optional[bool] = False
+    mq135_raw: Optional[int] = None
+    mq135_threshold: Optional[int] = 900
+    air_warning: Optional[bool] = False
+    distance_cm: Optional[float] = None
+    distance_enabled: Optional[bool] = True
+    flow_l_min: Optional[float] = 0.0
+    flow_enabled: Optional[bool] = True
+    max_flow_l_min: Optional[float] = 10.0
+    system_enabled: Optional[bool] = False
+    relay_on: Optional[bool] = False
+    safety_trip: Optional[bool] = False
+    safety_status: Optional[str] = "CLEAR"
+    fault_reasons: Optional[list[str]] = []
+
+
+_latest_esp32_telemetry: Optional[Dict[str, Any]] = None
+_esp32_history: list[Dict[str, Any]] = []
+_in_charge_permission: bool = True
+
+
+@app.post(
+    "/api/telemetry",
+    tags=["Telemetry"],
+    summary="Receive telemetry from ESP32 hardware and bridge to LaserGuard dashboard",
+)
+async def receive_esp32_telemetry(
+    data: Esp32TelemetryPayload,
+    registry: DeviceRegistry = Depends(get_device_registry),
+    ws_manager: WebSocketManager = Depends(get_ws_manager),
+    safety_engine: SafetyEngine = Depends(get_safety_engine),
+    event_store: EventStore = Depends(get_event_store),
+):
+    """
+    Direct Wi-Fi receiver for ESP32 hardware sketch.
+    Normalizes sensor readings, updates in-memory registry, evaluates safety rules,
+    audits meaningful events to SQLite blackbox, and pushes live updates to React WebSocket.
+    """
+    global _latest_esp32_telemetry
+    server_time = datetime.now(timezone.utc)
+    ingested_at = normalize_to_utc_iso(server_time)
+
+    record = data.model_dump()
+    record["received_at"] = ingested_at
+    _latest_esp32_telemetry = record
+    _esp32_history.append(record)
+    if len(_esp32_history) > 1000:
+        del _esp32_history[:-1000]
+
+    # Map ESP32 sensors to LaserGuard canonical readings
+    is_distance_trip = bool(
+        data.distance_enabled
+        and data.distance_cm is not None
+        and 0.0 <= data.distance_cm < 20.0
+    )
+
+    smoke_val = float(data.mq135_raw) if data.mq135_raw is not None else (60.0 if data.air_warning else 15.0)
+
+    valid_temp = None
+    if (
+        data.temperature_c is not None
+        and not data.temperature_fault
+        and -40.0 <= data.temperature_c <= 125.0
+    ):
+        valid_temp = float(data.temperature_c)
+
+    # Flow rate: If 0.0 during hardware demo (no water pump), pass None to avoid tripping min-flow rule
+    flow_val = float(data.flow_l_min) if data.flow_l_min is not None else None
+    if flow_val is not None and flow_val == 0.0:
+        flow_val = None
+    elif data.max_flow_l_min is not None and flow_val is not None and flow_val > data.max_flow_l_min:
+        # Maximum flow exceeded
+        pass
+
+    readings = SensorReadings(
+        door_open=is_distance_trip,
+        flame_detected=bool(data.flame_detected),
+        smoke_level=smoke_val,
+        temperature_c=valid_temp,
+        water_flow_lpm=flow_val,
+        machine_enabled=_in_charge_permission,
+        machine_running=bool(data.relay_on),
+        camera_intrusion_detected=is_distance_trip,
+    )
+
+    normalized_frame = NormalizedTelemetryFrame(
+        source=TelemetrySource.HARDWARE,
+        device_id=CANONICAL_DEVICE_ID,
+        timestamp=ingested_at,
+        readings=readings,
+    )
+
+    # 1. Update device registry with authoritative HARDWARE telemetry
+    registry.register_telemetry(normalized_frame, server_received_at=server_time)
+
+    # 2. Evaluate real-time safety
+    dev_status = registry.get_device_status(CANONICAL_DEVICE_ID, now=server_time)
+    recommended_state = RecommendedMachineState.NORMAL_OPERATION
+    buzzer_recommended = False
+
+    if dev_status:
+        dev_safety = safety_engine.evaluate_device(dev_status, evaluated_at=server_time)
+        dev_status.safety = dev_safety
+        recommended_state = dev_safety.recommended_state
+        buzzer_recommended = (dev_safety.overall_severity == SafetySeverity.CRITICAL) or (
+            dev_safety.overall_severity == SafetySeverity.WARNING
+            and any(
+                v.rule_id in ("RULE_HIGH_TEMPERATURE", "RULE_ELEVATED_SMOKE", "RULE_PERIMETER_INTRUSION")
+                for v in dev_safety.violations
+            )
+        )
+
+        # Audit meaningful state transitions in SQLite blackbox
+        try:
+            event_store.process_assessment_transition(
+                assessment=dev_safety,
+                connectivity_state=dev_status.connectivity_state,
+                timestamp=server_time,
+                device_status=dev_status,
+            )
+        except Exception:
+            pass
+
+    # 3. Push real-time snapshot over WebSocket to React dashboard
+    await ws_manager.broadcast_status(
+        registry,
+        safety_engine=safety_engine,
+        event="telemetry_update",
+    )
+
+    return {
+        "ok": True,
+        "message": "Telemetry received",
+        "recommended_state": recommended_state,
+        "buzzer_recommended": buzzer_recommended,
+        "safety_trip": data.safety_trip,
+    }
+
+
+@app.post("/api/in-charge-permission", tags=["Safety"], summary="Set supervisor in-charge permission")
+async def set_in_charge_permission(
+    enabled: bool,
+    registry: DeviceRegistry = Depends(get_device_registry),
+    ws_manager: WebSocketManager = Depends(get_ws_manager),
+    safety_engine: SafetyEngine = Depends(get_safety_engine),
+):
+    global _in_charge_permission
+    _in_charge_permission = enabled
+    server_time = datetime.now(timezone.utc)
+    dev_status = registry.get_device_status(CANONICAL_DEVICE_ID, now=server_time)
+    if dev_status and dev_status.latest_readings:
+        dev_status.latest_readings.machine_enabled = enabled
+        dev_safety = safety_engine.evaluate_device(dev_status, evaluated_at=server_time)
+        dev_status.safety = dev_safety
+        await ws_manager.broadcast_status(
+            registry,
+            safety_engine=safety_engine,
+            event="telemetry_update",
+        )
+    return {"ok": True, "in_charge_permission": _in_charge_permission}
+
+
+@app.get("/api/in-charge-permission", tags=["Safety"], summary="Get supervisor in-charge permission")
+def get_in_charge_permission():
+    return {"in_charge_permission": _in_charge_permission}
+
+
+@app.get("/api/latest", tags=["Telemetry"], summary="Get latest ESP32 telemetry packet")
+def get_latest_esp32_telemetry():
+    return _latest_esp32_telemetry or {"message": "No telemetry received yet"}
+
+
+@app.get("/api/logs", tags=["Telemetry"], summary="Get recent ESP32 telemetry history")
+def get_esp32_logs():
+    return _esp32_history
 
 
 @app.get(

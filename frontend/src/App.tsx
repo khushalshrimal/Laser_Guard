@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLaserGuardLive } from './hooks/useLaserGuardLive';
-import { fetchBackendHealth, ingestTelemetryPayload } from './services/api';
+import { fetchBackendHealth, ingestTelemetryPayload, toggleInChargePermission } from './services/api';
 import {
   BackendHealth,
   DeviceStatus,
@@ -29,7 +29,7 @@ export const App: React.FC = () => {
   } = useLaserGuardLive();
 
   const [activePage, setActivePage] = useState<PageId>('dashboard');
-  const [systemSource, setSystemSource] = useState<TelemetrySource>('SIMULATOR');
+  const [systemSource, setSystemSource] = useState<TelemetrySource>('HARDWARE');
   const [healthData, setHealthData] = useState<BackendHealth | null>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
@@ -141,22 +141,12 @@ export const App: React.FC = () => {
 
   const handleTogglePermission = async (enabled: boolean) => {
     setInChargePermission(enabled);
-    const isCurrentlyRunning = machine?.latest_readings?.machine_running || false;
-    if (!enabled) {
-      // In-charge permission revoked
-      if (isCurrentlyRunning) {
-        await handleTriggerScenario('unauthorized_running', { machine_enabled: false, machine_running: true });
-      } else {
-        await handleTriggerScenario('disarm_interlock', { machine_enabled: false, machine_running: false });
-      }
-    } else {
-      // In-charge permission granted
-      if (isCurrentlyRunning) {
-        await handleTriggerScenario('nominal', { machine_enabled: true, machine_running: true });
-      } else {
-        await handleTriggerScenario('idle', { machine_enabled: true, machine_running: false });
-      }
+    try {
+      await toggleInChargePermission(enabled);
+    } catch (e) {
+      console.error('Failed to update in-charge permission on server:', e);
     }
+    await refreshStatus();
   };
 
   const handleRefreshAll = async () => {

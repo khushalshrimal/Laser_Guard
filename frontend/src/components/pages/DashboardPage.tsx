@@ -40,6 +40,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 }) => {
   const [buzzerActive, setBuzzerActive] = useState<boolean>(false);
   const [cameraViewMode, setCameraViewMode] = useState<'2d' | '3d'>('2d');
+  const [showSimControls, setShowSimControls] = useState<boolean>(false);
 
   const readings = device?.latest_readings || {};
   const safety = device?.safety;
@@ -215,41 +216,109 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         <div className="lg:col-span-4 rounded-2xl border border-slate-800 bg-[#101522] p-5 flex flex-col justify-between space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-white uppercase tracking-wider">
-              Machine Control
+              {systemSource === 'HARDWARE' ? 'Hardware Relay Control' : 'Machine Control'}
             </span>
-            <span className="text-[10px] font-mono text-slate-500">
-              Direct Ingestion
+            <span
+              className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
+                systemSource === 'HARDWARE'
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                  : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+              }`}
+            >
+              {systemSource === 'HARDWARE' ? 'PHYSICAL ESP32' : 'Direct Ingestion'}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={handleStartCutting}
-              className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/25 transition-all"
-              title="Dispatches nominal operation simulation payload to POST /ingest"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Start (Sim)</span>
-            </button>
+          {systemSource === 'HARDWARE' ? (
+            <div className="p-3 rounded-xl bg-[#090d15] border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400 font-mono">Relay / Load:</span>
+                <span
+                  className={`text-xs font-mono font-bold px-2.5 py-0.5 rounded ${
+                    isRunning
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}
+                >
+                  {isRunning ? 'RELAY ON (ACTIVE)' : 'RELAY OFF (IDLE)'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono">
+                <span>Hardware Switches:</span>
+                <span className="text-slate-300">START (GPIO14) / STOP (GPIO12)</span>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={handleStartCutting}
+                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/25 transition-all"
+                title="Dispatches nominal operation simulation payload to POST /ingest"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Start (Sim)</span>
+              </button>
 
-            <button
-              onClick={handleStopCutting}
-              className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center justify-center gap-1.5 border border-slate-700 transition-all"
-              title="Dispatches idle state simulation payload to POST /ingest"
-            >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              <span>Stop (Sim)</span>
-            </button>
-          </div>
+              <button
+                onClick={handleStopCutting}
+                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold flex items-center justify-center gap-1.5 border border-slate-700 transition-all"
+                title="Dispatches idle state simulation payload to POST /ingest"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Stop (Sim)</span>
+              </button>
+            </div>
+          )}
 
-          <button
-            onClick={handleEmergencyStop}
-            className="w-full py-2 px-3 rounded-xl bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-mono font-bold flex items-center justify-center gap-2 shadow-md shadow-rose-600/20 transition-all"
-            title="Software simulation safety stop (dispatches door-trip fail-safe payload to POST /ingest; physical contactor not energized)"
-          >
-            <AlertOctagon className="w-4 h-4" />
-            <span>Emergency Stop</span>
-          </button>
+          {systemSource === 'HARDWARE' ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-mono">
+                <button
+                  onClick={() => setShowSimControls(!showSimControls)}
+                  className="text-cyan-400 hover:text-cyan-300 underline"
+                >
+                  {showSimControls ? 'Hide Manual Sim Override' : 'Show Manual Sim Override'}
+                </button>
+                <span className="text-slate-500">Live Hardware Mode</span>
+              </div>
+              {showSimControls && (
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={handleStartCutting}
+                      className="py-1.5 px-2 rounded-lg bg-emerald-600/80 hover:bg-emerald-500 text-white text-[11px] font-mono font-bold flex items-center justify-center gap-1"
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>Start (Sim)</span>
+                    </button>
+                    <button
+                      onClick={handleStopCutting}
+                      className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-mono font-bold flex items-center justify-center gap-1 border border-slate-700"
+                    >
+                      <Square className="w-3 h-3 fill-current" />
+                      <span>Stop (Sim)</span>
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleEmergencyStop}
+                    className="w-full py-1.5 px-2 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-white text-[11px] font-mono font-bold flex items-center justify-center gap-1"
+                  >
+                    <AlertOctagon className="w-3 h-3" />
+                    <span>Sim Emergency Stop</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={handleEmergencyStop}
+              className="w-full py-2 px-3 rounded-xl bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-mono font-bold flex items-center justify-center gap-2 shadow-md shadow-rose-600/20 transition-all"
+              title="Software simulation safety stop"
+            >
+              <AlertOctagon className="w-4 h-4" />
+              <span>Emergency Stop</span>
+            </button>
+          )}
         </div>
       </div>
 

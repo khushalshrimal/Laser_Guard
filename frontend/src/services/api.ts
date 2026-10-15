@@ -15,6 +15,9 @@ export function getApiBaseUrl(): string {
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
     return envUrl.trim().replace(/\/+$/, '');
   }
+  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+    return `http://${window.location.hostname}:8000`;
+  }
   return 'http://127.0.0.1:8000';
 }
 
@@ -44,6 +47,18 @@ export async function fetchBackendHealth(): Promise<BackendHealth> {
   const response = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!response.ok) {
     throw new Error(`Health check failed: HTTP ${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function toggleInChargePermission(enabled: boolean): Promise<{ ok: boolean; in_charge_permission: boolean }> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/in-charge-permission?enabled=${enabled}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to toggle in-charge permission: HTTP ${response.status}`);
   }
   return response.json();
 }
